@@ -22,6 +22,8 @@ namespace jax {
 
 void DuccFft(void* out, void** in, XlaCustomCallStatus*);
 
+void DynamicDuccFft(void* out, void** in, XlaCustomCallStatus*);
+
 }  // namespace jax
 
 #endif  // JAXLIB_CPU_DUCC_FFT_KERNELS_H_

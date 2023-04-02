@@ -462,7 +462,8 @@ class PolyHarness(Harness):
     self.name = f"{self.name}_enable_xla=True"
     return (self, other)
 
-  def run_test(self, tst: tf_test_util.JaxToTfTestCase):
+  def run_test(self, tst: tf_test_util.JaxToTfTestCase,
+               native_serialization_strict_checks: bool = True):
     # Make polymorphic_shapes and input_signature from poly_axes.
     if self.poly_axes is None:
       polymorphic_shapes = self.polymorphic_shapes
@@ -518,7 +519,8 @@ class PolyHarness(Harness):
         stack.enter_context(tst.assertRaisesRegex(expect_error_type, expect_error_regex))
 
       f_tf = jax2tf.convert(f_jax, polymorphic_shapes=polymorphic_shapes,
-                            enable_xla=self.enable_xla)
+                            enable_xla=self.enable_xla,
+                            native_serialization_strict_checks=native_serialization_strict_checks)
       # Run in tf.Eager mode first, because it is friendlier to debuggers
       res_tf = f_tf(*args) if not self.skip_jax_run else None
       f_tf_func = tf.function(
@@ -2024,6 +2026,26 @@ _POLY_SHAPE_TEST_HARNESSES = [
                 lambda x: jnp.eye(x.shape[0], M=x.shape[0] + 2) + x,
                 arg_descriptors=[RandArg((3, 1), _f32)],
                 poly_axes=[0]),
+    [
+        PolyHarness("fft", f"{fft_type=}_{nr_fft_lengths=}",
+            lambda x, fft_type, nr_fft_lengths: lax.fft_p.bind(
+                x, fft_type=fft_type,
+                fft_lengths=tuple(
+                    x.shape[-nr_fft_lengths:] if fft_type != xla_client.FftType.IRFFT else
+                    [(x.shape[-1] - 1) * 2])),
+            arg_descriptors=[
+                RandArg((3, 4, 5, 6),
+                        np.float32 if fft_type == xla_client.FftType.RFFT else np.complex64),
+                StaticArg(fft_type),
+                StaticArg(nr_fft_lengths)],
+            # All axes are dynamic
+            poly_axes=[(0, 1, 2, 3)],
+            tol=1e-4)
+
+         for fft_type in (xla_client.FftType.FFT, xla_client.FftType.IFFT,
+                         xla_client.FftType.RFFT, xla_client.FftType.IRFFT)
+         for nr_fft_lengths in (1, 2)
+    ],
     PolyHarness("full", "",
                 lambda x: lax.full((x.shape[0], 2), 3.) + x,
                 arg_descriptors=[RandArg((3, 1), _f32)],
@@ -2612,6 +2634,7 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
       #one_containing="",
   )
   def test_harness(self, harness: PolyHarness):
+    native_serialization_strict_checks = True  # TODO: remove this
     # Exclude some harnesses that are known to fail for native serialization
     if config.jax2tf_default_native_serialization:
       if not harness.enable_xla:
@@ -2620,7 +2643,7 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
       # Set of harness.group_name:platform that are implemented with custom call
       custom_call_harnesses = {
           "vmap_cholesky:cpu", "vmap_cholesky:gpu", "vmap_eig:cpu",
-          "vmap_eigh:cpu", "vmap_eigh:gpu", "vmap_fft:cpu",
+          "vmap_eigh:cpu", "vmap_eigh:gpu",
           "householder_product:cpu", "householder_product:gpu",
           "vmap_geqrf:cpu", "vmap_geqrf:gpu",
           "vmap_lu:cpu", "vmap_lu:gpu", "vmap_qr:cpu", "vmap_qr:gpu",
@@ -2632,6 +2655,13 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
           "vmap_random_split:gpu"}
       if f"{harness.group_name}:{jtu.device_under_test()}" in custom_call_harnesses:
         raise unittest.SkipTest("native serialization with shape polymorphism not implemented for custom calls; b/261671778")
+
+      if "fft" in harness.fullname:
+        # TODO(necula): we want these tests to run, but dynamic_ducc_fft is not
+        # yet allowed for serialization.
+        native_serialization_strict_checks = False
+        if "fft_fft_type" in harness.fullname and jtu.device_under_test() in ("tpu", "gpu"):
+          raise unittest.SkipTest("native serialization with shape polymorphism not implemented for fft with non-constant fft_lengths on GPU and TPU")
 
       # Set of harness.group_name or harness.group_name:platform that are implemented with HLO fallback lowering rules
       fallback_lowering_harnesses = {
@@ -2671,7 +2701,8 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
         raise unittest.SkipTest(
             "TODO(b/271645610): investigate inconclusive dimension operation for cumsum on gpu")
 
-    harness.run_test(self)
+    harness.run_test(self,
+        native_serialization_strict_checks=native_serialization_strict_checks)
 
 
 if __name__ == "__main__":

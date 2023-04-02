@@ -14,7 +14,7 @@
 """Tests for JAX primitive coverage.
 
 The bulk of the testing is done by `test_prim`, which is parameterized by
-about 2000+ test harnesses. See `primitive_harness.py` docstring for a
+about 3500+ test harnesses. See `primitive_harness.py` docstring for a
 description of test harnesses. That module contains also the definitions
 of all the test harnesses, and a specification of which are only partially
 implemented for JAX.
@@ -144,6 +144,8 @@ class JaxPrimitiveTest(tf_test_util.JaxToTfTestCase):
           skipCustomCallTest("blas_ctrsm, blas_dtrsm, blas_ztrsm, blas_strsm")
         if "custom_linear_solve" in harness.fullname:
           skipCustomCallTest("lapack_sgetrf, lapack_dgetrf")
+        if "fft_" in harness.fullname:
+          skipCustomCallTest("dynamic_ducc_fft")
 
       elif device == "tpu":
         if "approx_top_k_large=True" in harness.fullname:

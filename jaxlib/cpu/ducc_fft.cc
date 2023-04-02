@@ -27,6 +27,7 @@ namespace py = pybind11;
 namespace jax {
 namespace {
 
+// TODO(necula): this is used only by JAX < 0.4.9
 py::bytes BuildDuccFftDescriptor(const std::vector<uint64_t> &shape,
                                  bool is_double, int fft_type,
                                  const std::vector<uint64_t> &fft_lengths,
@@ -50,19 +51,43 @@ py::bytes BuildDuccFftDescriptor(const std::vector<uint64_t> &shape,
                    fbb.GetSize());
 }
 
+py::bytes BuildDynamicDuccFftDescriptor(
+    const uint32_t ndims,
+    bool is_double, int fft_type,
+    const std::vector<uint32_t> &axes,
+    bool forward) {
+  DynamicDuccFftDescriptorT descriptor;
+  descriptor.ndims = ndims;
+  descriptor.fft_type = static_cast<DuccFftType>(fft_type);
+  descriptor.dtype =
+      is_double ? DuccFftDtype_COMPLEX128 : DuccFftDtype_COMPLEX64;
+  descriptor.axes = axes;
+  descriptor.forward = forward;
+  flatbuffers::FlatBufferBuilder fbb;
+  fbb.Finish(DynamicDuccFftDescriptor::Pack(fbb, &descriptor));
+  return py::bytes(reinterpret_cast<char *>(fbb.GetBufferPointer()),
+                   fbb.GetSize());
+}
+
 py::dict Registrations() {
   pybind11::dict dict;
+  // TODO(necula): this must be kept for backwards compatibility
   dict["ducc_fft"] = EncapsulateFunction(DuccFft);
+  dict["dynamic_ducc_fft"] = EncapsulateFunction(DynamicDuccFft);
   return dict;
 }
 
 PYBIND11_MODULE(_ducc_fft, m) {
   m.def("registrations", &Registrations);
-  m.def("ducc_fft_descriptor", &BuildDuccFftDescriptor, py::arg("shape"),
+  // TODO(necula): this can be removed, it is used only by JAX < 0.4.9
+  m.def("ducc_fft_descriptor_unused", &BuildDuccFftDescriptor, py::arg("shape"),
         py::arg("is_double"), py::arg("fft_type"), py::arg("fft_lengths"),
         py::arg("strides_in"), py::arg("strides_out"), py::arg("axes"),
         py::arg("forward"), py::arg("scale"));
+  m.def("dynamic_ducc_fft_descriptor", &BuildDynamicDuccFftDescriptor,
+        py::arg("ndims"), py::arg("is_double"), py::arg("fft_type"),
+        py::arg("axes"), py::arg("forward"));
 }
 
-} // namespace
-} // namespace jax
+}  // namespace
+}  // namespace jax

@@ -183,7 +183,8 @@ class CompatTest(jtu.JaxTestCase):
   def run_one_test(self, func: Callable[..., jax.Array],
                    data: CompatTestData,
                    run_tf=None,
-                   rtol=None):
+                   rtol=None,
+                   compare_with_current=True):
     """Run one compatibility test.
 
     Args:
@@ -192,9 +193,16 @@ class CompatTest(jtu.JaxTestCase):
       run_tf: (optional) a function to invoke the XlaCallModule TF op. Takes
         a TensorFlow callable and the arguments.
       rtol: relative tolerance for numerical comparisons
+      compare_with_current: whether to compare the current behavior for
+        `func` with the one stored in `data`. If True serializes
+        `func` and checks its results and custom calls targets; also dumps
+        the current test data. If False, no serialization no comparisons are
+        done.
     """
     if default_jax_backend() != data.platform:
       self.skipTest(f"Test enabled only for {data.platform}")
+    if rtol is not None:
+      rtol = 1.e-7
 
     # Check that it runs in JAX native
     res_from_jax = jax.jit(func)(*data.inputs)
@@ -203,22 +211,23 @@ class CompatTest(jtu.JaxTestCase):
     res_from_jax = tuple(np.array(a) for a in res_from_jax)
 
     # Use the native exporter, to make sure we get the proper serialized module.
-    exported = jax2tf.jax_export.serialize_native(
-        jax.jit(func),
-        [core.ShapedArray(a.shape, a.dtype) for a in data.inputs],
-        lowering_platform=default_jax_backend(),
-        # Must turn off strict checks because the custom calls may be unallowed.
-        strict_checks=False,
-    )
+    if compare_with_current:
+      exported = jax2tf.jax_export.serialize_native(
+          jax.jit(func),
+          [core.ShapedArray(a.shape, a.dtype) for a in data.inputs],
+          lowering_platform=default_jax_backend(),
+          # Must turn off strict checks because the custom calls may be unallowed.
+          strict_checks=False,
+      )
 
-    module_str = str(exported.mlir_module)
-    custom_call_re = r"stablehlo.custom_call\s*@([^\(]+)\("
-    custom_call_targets = sorted(
-        list(set(re.findall(custom_call_re, module_str)))
-    )
-    np.set_printoptions(threshold=sys.maxsize, floatmode="unique")
-    # Print the test data to simplify updating the test
-    updated_testdata = f"""
+      module_str = str(exported.mlir_module)
+      custom_call_re = r"stablehlo.custom_call\s*@([^\(]+)\("
+      custom_call_targets = sorted(
+          list(set(re.findall(custom_call_re, module_str)))
+      )
+      np.set_printoptions(threshold=sys.maxsize, floatmode="unique")
+      # Print the test data to simplify updating the test
+      updated_testdata = f"""
 # Pasted from the test output (see back_compat_test.py module docstring)
 data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
     testdata_version={CURRENT_TESTDATA_VERSION},
@@ -232,21 +241,18 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
     xla_call_module_version={exported.xla_call_module_version},
 )  # End paste
 """
-    output_dir = os.getenv("TEST_UNDECLARED_OUTPUTS_DIR",
-                           "/tmp/back_compat_testdata")
-    output_file = os.path.join(output_dir, f"{self._testMethodName}.py")
-    logging.info("Writing the up-to-date testdata at %s", output_file)
-    with open(output_file, "w") as f:
-      f.write(updated_testdata)
-
-    if rtol is not None:
-      rtol = 1.e-7
-    self.assertAllClose(res_from_jax, data.expected_outputs, rtol=rtol)
+      output_dir = os.getenv("TEST_UNDECLARED_OUTPUTS_DIR",
+                            "/tmp/back_compat_testdata")
+      output_file = os.path.join(output_dir, f"{self._testMethodName}.py")
+      logging.info("Writing the up-to-date testdata at %s", output_file)
+      with open(output_file, "w") as f:
+        f.write(updated_testdata)
+      self.assertListEqual(custom_call_targets, data.custom_call_targets)
+      self.assertAllClose(res_from_jax, data.expected_outputs, rtol=rtol)
 
     res_serialized = self.run_serialized(data, run_tf=run_tf)
     logging.info("Result of serialized run is %s", res_serialized)
     self.assertAllClose(res_serialized, data.expected_outputs)
-    self.assertListEqual(custom_call_targets, data.custom_call_targets)
 
   def run_serialized(self, data: CompatTestData, run_tf=None):
     # Run the serialized module. For now, use XlaCallModule. This has the
@@ -332,7 +338,8 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
       return lax.fft(x, fft_type="fft", fft_lengths=(4,))
 
     data = load_testdata(cpu_ducc_fft.data_2023_03_17)
-    self.run_one_test(func, data)
+    compare_with_current = False  # We have changed the lowering for fft
+    self.run_one_test(func, data, compare_with_current=compare_with_current)
 
   @staticmethod
   def eigh_harness(shape, dtype):
