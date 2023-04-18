@@ -1629,7 +1629,9 @@ def manual_proto(
   proto = xc.OpSharding()
   proto.type = xc.OpSharding.Type.OTHER
   proto.tile_assignment_dimensions = tad_shape
-  proto.tile_assignment_devices = list(raw_mesh.transpose(tad_perm).reshape(tad_shape).flat)
+  proto.iota_dimensions = [raw_mesh[d] for d in tad_perm]
+  m={x:i for i,x in enumerate(tad_perm)}
+  proto.iota_minor_to_major = reversed([m[x] for x in range(len(tad_perm))])
   proto.last_tile_dims = [xc.OpSharding.Type.REPLICATED, xc.OpSharding.Type.MANUAL]
   return proto
 

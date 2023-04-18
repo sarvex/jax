@@ -57,7 +57,6 @@ ShardingSpec = pmap_lib.ShardingSpec
 OpShardingType = Any
 
 
-
 def _sharding_spec_mesh_shape(self):
   sharded_axis_sizes = []
   for sharding in self.sharding:
@@ -146,10 +145,16 @@ def sharding_spec_sharding_proto(
       mesh_permutation.extend(axes)
     proto.last_tile_dims = last_tile_dims
 
-  proto_mesh = mesh.transpose(mesh_permutation).reshape(new_mesh_shape)
-  proto.tile_assignment_dimensions = list(proto_mesh.shape)
-  proto.tile_assignment_devices = list(proto_mesh.flat)
-  assert math.prod(proto.tile_assignment_dimensions) == len(proto.tile_assignment_devices)
+  num_devices = math.prod(proto.tile_assignment_dimensions)
+  proto.tile_assignment_dimensions = new_mesh_shape
+  if num_devices == 1:
+    proto_mesh = mesh.transpose(mesh_permutation).reshape(new_mesh_shape)
+    proto.tile_assignment_devices = list(proto_mesh.flat)
+  else:
+    proto.iota_dimensions = [mesh.shape[d] for d in mesh_permutation]
+    m = {x: i for i, x in enumerate(mesh_permutation)}
+    proto.iota_minor_to_major = reversed([m[x] for x in range(len(mesh_permutation))])
+  assert num_devices == math.prod(proto.iota_dimensions)
   return proto
 
 
