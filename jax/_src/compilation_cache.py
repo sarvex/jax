@@ -90,10 +90,7 @@ def get_executable(
     serialized_executable = decompressor.decompress(serialized_executable)
   else:
     serialized_executable = zlib.decompress(serialized_executable)
-  xla_executable_deserialized = backend.deserialize_executable(
-      serialized_executable, compile_options
-  )
-  return xla_executable_deserialized
+  return backend.deserialize_executable(serialized_executable, compile_options)
 
 
 def put_executable(
@@ -200,10 +197,7 @@ def _hash_devices(hash_obj, devices: np.ndarray) -> None:
     _hash_string(hash_obj, device.device_kind)
 
 def _hash_compile_options(hash_obj, compile_options_obj):
-  if xla_extension_version >= 145:
-    expected_num_compile_options = 12
-  else:
-    expected_num_compile_options = 11
+  expected_num_compile_options = 12 if xla_extension_version >= 145 else 11
   # Ignore private and built-in methods. These can unexpectedly change and lead
   # to false positives, e.g. when different Python versions include different
   # built-ins.
@@ -241,7 +235,7 @@ def _hash_compile_options(hash_obj, compile_options_obj):
       elif isinstance(kv[1], bool):
         _hash_bool(hash_obj, kv[1])
       else:
-        raise RuntimeError("Invalid type: %s" % repr(type(kv[1])))
+        raise RuntimeError(f"Invalid type: {repr(type(kv[1]))}")
 
 
 def _hash_executable_build_options(hash_obj, executable_obj):
@@ -321,16 +315,11 @@ extra_flag_prefixes_to_include_in_cache_key: List[str] = []
 def _hash_xla_flags(hash_obj):
   xla_flags = []
 
-  xla_flags_env_var = os.getenv("XLA_FLAGS")
-  if xla_flags_env_var:
+  if xla_flags_env_var := os.getenv("XLA_FLAGS"):
     xla_flags.extend(xla_flags_env_var.split())
 
-  for arg in sys.argv:
-    if arg.startswith("--xla") or any(
-        arg.startswith(p) for p in extra_flag_prefixes_to_include_in_cache_key
-    ):
-      xla_flags.append(arg)
-
+  xla_flags.extend(arg for arg in sys.argv if arg.startswith("--xla") or any(
+      arg.startswith(p) for p in extra_flag_prefixes_to_include_in_cache_key))
   # N.B. all XLA flags that take an argument must use '=' and not a space
   # (e.g. --xla_force_host_platform_device_count=8) (I think).
   for flag in xla_flags:

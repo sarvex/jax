@@ -99,8 +99,9 @@ def matrix_power(a: ArrayLike, n: int) -> Array:
   arr, = promote_dtypes_inexact(jnp.asarray(a))
 
   if arr.ndim < 2:
-    raise TypeError("{}-dimensional array given. Array must be at least "
-                    "two-dimensional".format(arr.ndim))
+    raise TypeError(
+        f"{arr.ndim}-dimensional array given. Array must be at least two-dimensional"
+    )
   if arr.shape[-2] != arr.shape[-1]:
     raise TypeError("Last 2 dimensions of the array must be square")
   try:
@@ -274,8 +275,7 @@ def _cofactor_solve(a: ArrayLike, b: ArrayLike) -> Tuple[Array, Array]:
   a_shape = jnp.shape(a)
   b_shape = jnp.shape(b)
   a_ndims = len(a_shape)
-  if not (a_ndims >= 2 and a_shape[-1] == a_shape[-2]
-    and b_shape[-2:] == a_shape[-2:]):
+  if a_ndims < 2 or a_shape[-1] != a_shape[-2] or b_shape[-2:] != a_shape[-2:]:
     msg = ("The arguments to _cofactor_solve must have shapes "
            "a=[..., m, m] and b=[..., m, m]; got a={} and b={}")
     raise ValueError(msg.format(a_shape, b_shape))
@@ -592,16 +592,14 @@ def qr(a: ArrayLike, mode: str = "reduced") -> Union[Array, Tuple[Array, Array]]
   if mode == "raw":
     a, taus = lax_linalg.geqrf(a)
     return _T(a), taus
-  if mode in ("reduced", "r", "full"):
+  if mode in {"reduced", "r", "full"}:
     full_matrices = False
   elif mode == "complete":
     full_matrices = True
   else:
     raise ValueError(f"Unsupported QR decomposition mode '{mode}'")
   q, r = lax_linalg.qr(a, full_matrices=full_matrices)
-  if mode == "r":
-    return r
-  return q, r
+  return r if mode == "r" else (q, r)
 
 
 @_wraps(np.linalg.solve)

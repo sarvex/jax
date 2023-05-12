@@ -123,7 +123,7 @@ class EqualStore:
       self._store.store(val)
     except StoreException as e:
       try:
-        okay = bool(self._store._val == val)
+        okay = self._store._val == val
       except:
         raise e from None
       else:
@@ -374,8 +374,7 @@ def _copy_main_traces(x):
 
 @transformation
 def hashable_partial(x, *args):
-  ans = yield (x,) + args, {}
-  yield ans
+  yield (yield (x,) + args, {})
 
 
 def merge_linear_aux(aux1, aux2):

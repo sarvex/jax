@@ -62,10 +62,7 @@ def _ensure_str(x: str) -> str:
 
 def _ensure_str_tuple(x: Union[str, Iterable[str]]) -> Tuple[str, ...]:
   """Convert x to a tuple of strings."""
-  if isinstance(x, str):
-    return (x,)
-  else:
-    return tuple(map(_ensure_str, x))
+  return (x, ) if isinstance(x, str) else tuple(map(_ensure_str, x))
 
 @lu.transformation_with_aux
 def flatten_fun(in_tree, *args_flat):
@@ -205,9 +202,7 @@ def validate_argnames(sig: inspect.Signature, argnames: Tuple[str, ...], argname
       invalid_kwargs.add(param_name)
 
 
-  # Check whether any kwargs are invalid due to position only
-  invalid_argnames = invalid_kwargs & set(argnames)
-  if invalid_argnames:
+  if invalid_argnames := invalid_kwargs & set(argnames):
     # raise ValueError(f"Jitted function has invalid argnames {invalid_argnames} "
     #                  f"in {argnames_name}. These are positional-only")
     # TODO: 2022-08-20 or later: replace with error
@@ -220,9 +215,7 @@ def validate_argnames(sig: inspect.Signature, argnames: Tuple[str, ...], argname
   if var_kwargs:
     return
 
-  # Check that all argnames exist on function
-  invalid_argnames = set(argnames) - valid_kwargs
-  if invalid_argnames:
+  if invalid_argnames := set(argnames) - valid_kwargs:
     # TODO: 2022-08-20 or later: replace with error
     # raise ValueError(f"Jitted function has invalid argnames {invalid_argnames} "
     #                  f"in {argnames_name}. Function does not take these args.")
@@ -301,8 +294,7 @@ def _argnums_partial(dyn_argnums, fixed_args, *dyn_args, **kwargs):
   fixed_args_ = iter(fixed_args)
   args = [next(fixed_args_).val if x is sentinel else x for x in args]
   assert next(fixed_args_, sentinel) is sentinel
-  ans = yield args, kwargs
-  yield ans
+  yield (yield args, kwargs)
 
 
 def argnames_partial_except(f: lu.WrappedFun, static_argnames: Tuple[str, ...],
@@ -329,15 +321,14 @@ def argnames_partial_except(f: lu.WrappedFun, static_argnames: Tuple[str, ...],
 @lu.transformation
 def _argnames_partial(fixed_kwargs: WrapKwArgs, *args, **dyn_kwargs):
   kwargs = dict({k: v.val for k, v in fixed_kwargs.val.items()}, **dyn_kwargs)
-  ans = yield args, kwargs
-  yield ans
+  yield (yield args, kwargs)
 
 
 def donation_vector(donate_argnums, args, kwargs) -> Tuple[bool, ...]:
   """Returns a tuple with a boolean value for each leaf in args."""
   res: List[bool] = []
   for i, arg in enumerate(args):
-    donate = bool(i in donate_argnums)
+    donate = i in donate_argnums
     res.extend((donate,) * tree_structure(arg).num_leaves)
   res.extend((False,) * tree_structure(kwargs).num_leaves)
   return tuple(res)

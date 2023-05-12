@@ -285,12 +285,15 @@ def gather(operand: ArrayLike, start_indices: ArrayLike,
   else:
     fill_value = None
   return gather_p.bind(
-      operand, start_indices, dimension_numbers=dimension_numbers,
+      operand,
+      start_indices,
+      dimension_numbers=dimension_numbers,
       slice_sizes=core.canonicalize_shape(slice_sizes),
-      unique_indices=bool(unique_indices),
-      indices_are_sorted=bool(indices_are_sorted),
+      unique_indices=unique_indices,
+      indices_are_sorted=indices_are_sorted,
       mode=parsed_mode,
-      fill_value=fill_value)
+      fill_value=fill_value,
+  )
 
 
 class ScatterDimensionNumbers(NamedTuple):
@@ -664,10 +667,10 @@ def slice_in_dim(operand: Union[Array, np.ndarray], start_index: Optional[int],
   if limit_index_int < 0:
     limit_index_int = limit_index_int + len_axis
 
-  axis = int(axis)
+  axis = axis
   start_indices[axis] = start_index_int
   limit_indices[axis] = limit_index_int
-  strides[axis] = int(stride)
+  strides[axis] = stride
 
   return slice(operand, start_indices, limit_indices, strides)
 
@@ -675,17 +678,14 @@ def slice_in_dim(operand: Union[Array, np.ndarray], start_index: Optional[int],
 def index_in_dim(operand: Union[Array, np.ndarray], index: int, axis: int = 0,
                  keepdims: bool = True) -> Array:
   """Convenience wrapper around slice to perform int indexing."""
-  index, axis = core._canonicalize_dimension(index), int(axis)
+  index, axis = core._canonicalize_dimension(index), axis
   axis_size = operand.shape[axis]
   wrapped_index = index + axis_size if index < 0 else index
   if not 0 <= wrapped_index < axis_size:
     msg = 'index {} is out of bounds for axis {} with size {}'
     raise IndexError(msg.format(index, axis, axis_size))
   result = slice_in_dim(operand, wrapped_index, wrapped_index + 1, 1, axis)
-  if keepdims:
-    return result
-  else:
-    return lax.squeeze(result, (axis,))
+  return result if keepdims else lax.squeeze(result, (axis,))
 
 
 def dynamic_slice_in_dim(operand: Union[Array, np.ndarray],
@@ -695,7 +695,7 @@ def dynamic_slice_in_dim(operand: Union[Array, np.ndarray],
   start_indices: List[ArrayLike] = [lax._const(start_index, 0)] * operand.ndim
   slice_sizes = list(operand.shape)
 
-  axis = int(axis)
+  axis = axis
   start_indices[axis] = start_index
   slice_sizes[axis] = core._canonicalize_dimension(slice_size)
   return dynamic_slice(operand, start_indices, slice_sizes)
@@ -706,10 +706,7 @@ def dynamic_index_in_dim(operand: Union[Array, np.ndarray],
                          axis: int = 0, keepdims: bool = True) -> Array:
   """Convenience wrapper around dynamic_slice to perform int indexing."""
   result = dynamic_slice_in_dim(operand, index, 1, axis)
-  if keepdims:
-    return result
-  else:
-    return lax.squeeze(result, (axis,))
+  return result if keepdims else lax.squeeze(result, (axis,))
 
 
 def dynamic_update_slice_in_dim(operand: Union[Array, np.ndarray],
@@ -718,7 +715,7 @@ def dynamic_update_slice_in_dim(operand: Union[Array, np.ndarray],
   """Convenience wrapper around :func:`dynamic_update_slice` to update a slice
      in a single ``axis``.
   """
-  axis = int(axis)
+  axis = axis
   start_indices: List[ArrayLike] = [lax._const(start_index, 0)] * lax._ndim(operand)
   start_indices[axis] = start_index
   return dynamic_update_slice(operand, update, start_indices)
@@ -730,7 +727,7 @@ def dynamic_update_index_in_dim(operand: Union[Array, np.ndarray],
   """Convenience wrapper around :func:`dynamic_update_slice` to update a slice
      of size 1 in a single ``axis``.
   """
-  axis = int(axis)
+  axis = axis
   if lax._ndim(update) != lax._ndim(operand):
     assert lax._ndim(update) + 1 == lax._ndim(operand)
     update = lax.expand_dims(update, (axis,))
@@ -756,11 +753,11 @@ def _slice_shape_rule(operand, *, start_indices, limit_indices, strides):
     msg = ("slice start_indices must be greater than or equal to zero, "
            "got start_indices of {}.")
     raise TypeError(msg.format(start_indices))
-  if not jax.config.jax_dynamic_shapes:
-    if not core.greater_equal_shape(limit_indices, start_indices):
-      msg = ("slice limit_indices must be greater than or equal to start_indices,"
-            " got start_indices {} and limit_indices {}.")
-      raise TypeError(msg.format(start_indices, limit_indices))
+  if not jax.config.jax_dynamic_shapes and not core.greater_equal_shape(
+      limit_indices, start_indices):
+    msg = ("slice limit_indices must be greater than or equal to start_indices,"
+          " got start_indices {} and limit_indices {}.")
+    raise TypeError(msg.format(start_indices, limit_indices))
   if strides is None or tuple(strides) == (1,) * len(operand.shape):
     shape = [limit if type(start) is int and start == 0 else limit - start
              for start, limit in zip(start_indices, limit_indices)]
@@ -870,10 +867,9 @@ def _dynamic_slice_transpose_rule(t, operand, *start_indices, slice_sizes):
   operand_shape, operand_dtype = operand.aval.shape, operand.aval.dtype
   if type(t) is ad_util.Zero:
     return [ad_util.Zero(operand.aval)] + [None] * len(start_indices)
-  else:
-    zeros = lax.full(operand_shape, 0, operand_dtype)
-    return ([dynamic_update_slice_p.bind(zeros, t, *start_indices)] +
-            [None] * len(start_indices))
+  zeros = lax.full(operand_shape, 0, operand_dtype)
+  return ([dynamic_update_slice_p.bind(zeros, t, *start_indices)] +
+          [None] * len(start_indices))
 
 def _batch_dynamic_slice_indices(indices, bdims):
   if len(indices) == 0:
@@ -1394,28 +1390,27 @@ def _gather_lower(ctx, operand, indices, *,
     index_vector_dim=len(ctx.avals_in[1].shape) - 1,
     offset_dims=list(dimension_numbers.offset_dims),
     start_index_map=list(dimension_numbers.start_index_map))
-  if not core.is_constant_shape(slice_sizes):
-    slice_sizes = mlir.eval_dynamic_shape(ctx, slice_sizes)
-    # TODO(burmako): Fix overly conservative type inference of DynamicGatherOp.
-    # For now use the build_generic so that we can specify the result type.
-    # return hlo.DynamicGatherOp(
-    #     operand, indices, mlir.shape_tensor(slice_sizes),
-    #     dnums, indices_are_sorted=ir.BoolAttr.get(indices_are_sorted)).results
-    results = [mlir.aval_to_ir_type(aval_out)]
-    operands = [operand, indices, mlir.shape_tensor(slice_sizes)]
-    attributes = {
-        "dimension_numbers": dnums,
-        "indices_are_sorted": ir.BoolAttr.get(indices_are_sorted)
-    }
-    return hlo.DynamicGatherOp.build_generic(
-        results=results, operands=operands, attributes=attributes).results
-  else:
+  if core.is_constant_shape(slice_sizes):
     return hlo.GatherOp(
         operand,
         indices,
         dnums,
         mlir.dense_int_elements(slice_sizes),
         indices_are_sorted=ir.BoolAttr.get(indices_are_sorted)).results
+  slice_sizes = mlir.eval_dynamic_shape(ctx, slice_sizes)
+  # TODO(burmako): Fix overly conservative type inference of DynamicGatherOp.
+  # For now use the build_generic so that we can specify the result type.
+  # return hlo.DynamicGatherOp(
+  #     operand, indices, mlir.shape_tensor(slice_sizes),
+  #     dnums, indices_are_sorted=ir.BoolAttr.get(indices_are_sorted)).results
+  results = [mlir.aval_to_ir_type(aval_out)]
+  operands = [operand, indices, mlir.shape_tensor(slice_sizes)]
+  attributes = {
+      "dimension_numbers": dnums,
+      "indices_are_sorted": ir.BoolAttr.get(indices_are_sorted)
+  }
+  return hlo.DynamicGatherOp.build_generic(
+      results=results, operands=operands, attributes=attributes).results
 
 mlir.register_lowering(gather_p, _gather_lower)
 
@@ -1500,8 +1495,10 @@ def _scatter_shape_rule(operand, indices, updates, *, update_jaxpr,
   _no_duplicate_dims(scatter_dims_to_operand_dims, "scatter",
                      "scatter_dims_to_operand_dims")
 
-  max_update_slice_sizes = [operand.shape[i] for i in range(len(operand.shape))
-                            if not i in set(inserted_window_dims)]
+  max_update_slice_sizes = [
+      operand.shape[i] for i in range(len(operand.shape))
+      if i not in set(inserted_window_dims)
+  ]
 
   for i in range(len(update_window_dims)):
     update_window_dim = update_window_dims[i]
@@ -2115,8 +2112,8 @@ def _dynamic_slice_indices(
     raise ValueError(msg.format(len(start_indices), operand.shape))
   if not isinstance(start_indices, (tuple, list)):
     if start_indices.ndim != 1:  # type: ignore[union-attr]
-      raise ValueError("Slice indices must be a 1D sequence, got {}"
-                       .format(start_indices.shape))  # type: ignore[union-attr]
+      raise ValueError(
+          f"Slice indices must be a 1D sequence, got {start_indices.shape}")
     start_indices = list(start_indices)
   result: List[ArrayLike] = []
   for i, d in zip(start_indices, operand.shape):

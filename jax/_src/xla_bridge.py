@@ -19,6 +19,7 @@ and provide some automatic type mapping logic for converting between Numpy and
 XLA. There are also a handful of related casting utilities.
 """
 
+
 from functools import partial, lru_cache
 import io
 import json
@@ -42,7 +43,7 @@ iree: Optional[Any]
 
 try:
   import jax._src.iree as iree  # type: ignore
-except (ModuleNotFoundError, ImportError):
+except ImportError:
   iree = None
 
 traceback_util.register_exclusion(__file__)
@@ -421,9 +422,10 @@ def backends() -> Dict[str, xla_client.Client]:
       priorities = range(len(platforms), 0, -1)
       platforms_and_priorities = list(zip(platforms, priorities))
     else:
-      platforms_and_priorities = list(
-          (platform, priority) for platform, (_, priority)
-          in _backend_factories.items())
+      platforms_and_priorities = [
+          (platform, priority)
+          for platform, (_, priority) in _backend_factories.items()
+      ]
     default_priority = -1000
     for platform, priority in platforms_and_priorities:
       try:
@@ -438,17 +440,15 @@ def backends() -> Dict[str, xla_client.Client]:
           # We always expect the CPU and interpreter backends to initialize
           # successfully.
           raise
+        # If the backend isn't built into the binary, or if it has no devices,
+        # we expect a RuntimeError.
+        err_msg = f"Unable to initialize backend '{platform}': {err}"
+        if config.jax_platforms:
+          err_msg += " (set JAX_PLATFORMS='' to automatically choose an available backend)"
+          raise RuntimeError(err_msg)
         else:
-          # If the backend isn't built into the binary, or if it has no devices,
-          # we expect a RuntimeError.
-          err_msg = f"Unable to initialize backend '{platform}': {err}"
-          if config.jax_platforms:
-            err_msg += " (set JAX_PLATFORMS='' to automatically choose an available backend)"
-            raise RuntimeError(err_msg)
-          else:
-            _backends_errors[platform] = str(err)
-            logger.info(err_msg)
-            continue
+          _backends_errors[platform] = str(err)
+          logger.info(err_msg)
     assert _default_backend is not None
     # We don't warn about falling back to CPU on Mac OS, because we don't
     # support anything else there at the moment and warning would be pointless.
@@ -532,9 +532,7 @@ def get_device_backend(
     device: Optional[xla_client.Device] = None,
 ) -> xla_client.Client:
   """Returns the Backend associated with `device`, or the default Backend."""
-  if device is not None:
-    return device.client
-  return get_backend()
+  return device.client if device is not None else get_backend()
 
 
 def device_count(

@@ -108,12 +108,12 @@ def pure_callback_lowering(ctx, *args, callback, **params):
 
   sharding = None
   axis_context = ctx.module_context.axis_context
-  if isinstance(axis_context, sharding_impls.ShardingContext):
-    if len(axis_context.device_assignment) > 1:
-      raise NotImplementedError(
-          "pure_callback is only supported in spmd computations when all mesh"
-          " axes are partitioned manually (no partial automatic sharding)."
-      )
+  if (isinstance(axis_context, sharding_impls.ShardingContext)
+      and len(axis_context.device_assignment) > 1):
+    raise NotImplementedError(
+        "pure_callback is only supported in spmd computations when all mesh"
+        " axes are partitioned manually (no partial automatic sharding)."
+    )
   if isinstance(axis_context, sharding_impls.SPMDAxisContext):
     if axis_context.manual_axes != frozenset(axis_context.mesh.axis_names):
       raise NotImplementedError(

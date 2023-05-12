@@ -254,9 +254,9 @@ def _is_axes_leaf(entry):
   if isinstance(entry, dict) and all_leaves(entry.values()):
     return True
   # NOTE: `None`s are not considered leaves by `all_leaves`
-  if isinstance(entry, (tuple, list)) and all_leaves(v for v in entry if v is not None):
-    return True
-  return False
+  return bool(
+      isinstance(entry, (tuple, list))
+      and all_leaves(v for v in entry if v is not None))
 
 def _prepare_axes(axes, arg_name):
   entries, treedef = tree_flatten(axes, is_leaf=_is_axes_leaf)
@@ -457,9 +457,8 @@ def xmap(fun: Callable,
     in_axes, in_axes_entries, _ = _prepare_axes(in_axes, "in_axes")
   if out_axes == ():
     raise ValueError("xmapped functions cannot have no return values")
-  else:
-    out_axes, out_axes_entries, out_axes_treedef = _prepare_axes(out_axes, "out_axes")
-    out_axes_entries = tuple(out_axes_entries)  # Make entries hashable
+  out_axes, out_axes_entries, out_axes_treedef = _prepare_axes(out_axes, "out_axes")
+  out_axes_entries = tuple(out_axes_entries)  # Make entries hashable
 
   axis_sizes = {} if axis_sizes is None else axis_sizes
   axis_resources = {} if axis_resources is None else axis_resources
@@ -672,31 +671,30 @@ def make_xmap_callable(fun: lu.WrappedFun,
   f = plan.vectorize_and_loop(f, in_axes, out_axes)
 
   used_resources = _jaxpr_resources(jaxpr, resource_env) | set(it.chain(*axis_resources.values()))
-  used_mesh_axes = used_resources & resource_env.physical_resource_axes
-  if used_mesh_axes:
-    assert spmd_in_axes is None and spmd_out_axes_thunk is None  # No outer xmaps, so should be None
-    mesh_in_axes, mesh_out_axes = plan.to_mesh_axes(in_axes, out_axes)
-    mesh = resource_env.physical_mesh
-    tiling_method: pxla.TilingMethod
-    if config.experimental_xmap_spmd_lowering_manual:
-      manual_mesh_axes = frozenset(it.chain.from_iterable(plan.physical_axis_resources.values()))
-      tiling_method = pxla.TileManual(manual_mesh_axes)
-    else:
-      tiling_method = pxla.TileVectorize()
-    in_shardings = [NamedSharding(mesh, array_mapping_to_axis_resources(i))
-                    for i in mesh_in_axes]
-    out_shardings = [NamedSharding(mesh, array_mapping_to_axis_resources(o))
-                     for o in mesh_out_axes]
-    return pxla.lower_mesh_computation(
-        f, 'xmap', name, mesh,
-        in_shardings, out_shardings, donated_invars,
-        use_spmd_lowering, in_avals,
-        tiling_method=tiling_method,
-        lowering_platform=lowering_platform)
-  else:
+  if not (used_mesh_axes :=
+          used_resources & resource_env.physical_resource_axes):
     return dispatch.sharded_lowering(
         f, name, donated_invars, True, False, in_avals, (None,) * len(in_avals),
         lowering_platform=lowering_platform)
+  assert spmd_in_axes is None and spmd_out_axes_thunk is None  # No outer xmaps, so should be None
+  mesh_in_axes, mesh_out_axes = plan.to_mesh_axes(in_axes, out_axes)
+  mesh = resource_env.physical_mesh
+  tiling_method: pxla.TilingMethod
+  if config.experimental_xmap_spmd_lowering_manual:
+    manual_mesh_axes = frozenset(it.chain.from_iterable(plan.physical_axis_resources.values()))
+    tiling_method = pxla.TileManual(manual_mesh_axes)
+  else:
+    tiling_method = pxla.TileVectorize()
+  in_shardings = [NamedSharding(mesh, array_mapping_to_axis_resources(i))
+                  for i in mesh_in_axes]
+  out_shardings = [NamedSharding(mesh, array_mapping_to_axis_resources(o))
+                   for o in mesh_out_axes]
+  return pxla.lower_mesh_computation(
+      f, 'xmap', name, mesh,
+      in_shardings, out_shardings, donated_invars,
+      use_spmd_lowering, in_avals,
+      tiling_method=tiling_method,
+      lowering_platform=lowering_platform)
 
 
 class EvaluationPlan(NamedTuple):
@@ -937,7 +935,7 @@ def _resource_typing_xmap(avals,
                           outer_axis_resources):
   axis_resources = params['axis_resources']
   inner_axis_resources = dict(outer_axis_resources)
-  inner_axis_resources.update(axis_resources)
+  inner_axis_resources |= axis_resources
   if len(inner_axis_resources) < len(outer_axis_resources) + len(axis_resources):
     overlap = set(outer_axis_resources) & set(axis_resources)
     raise JAXTypeError(
@@ -950,19 +948,20 @@ def _resource_typing_xmap(avals,
 
   call_jaxpr = params['call_jaxpr']
   pxla.resource_typecheck(
-      params['call_jaxpr'], resource_env, inner_axis_resources,
+      call_jaxpr,
+      resource_env,
+      inner_axis_resources,
       lambda: (f"an xmapped function {params['name']} " +
                (f"(xmap called at {source_info_util.summarize(source_info)})"
-                if source_info else "")))
-
+                if source_info else "")),
+  )
   for v, axes in zip(call_jaxpr.outvars, params['out_axes']):
     broadcast_axes = set(axes) - set(v.aval.named_shape)
     used_resources = set(it.chain.from_iterable(
         inner_axis_resources[a] for a in v.aval.named_shape))
     for baxis in broadcast_axes:
       baxis_resources = set(inner_axis_resources[baxis])
-      overlap = baxis_resources & used_resources
-      if overlap:
+      if overlap := baxis_resources & used_resources:
         resource_to_axis = {}
         for axis in v.aval.named_shape:
           for raxis in inner_axis_resources[axis]:
@@ -1213,44 +1212,43 @@ def _batch_trace_process_xmap(self, is_spmd, primitive, f: lu.WrappedFun, tracer
   assert primitive is xmap_p
   if not is_spmd and all(dim is not_mapped for dim in dims):
     return primitive.bind(f, *vals, **params)
+  assert len({x.shape[d] for x, d in zip(vals, dims) if d is not not_mapped}) == 1
+  new_in_axes = tuple(
+    _fmap_dims(in_axes, lambda a: a + (d is not not_mapped and d <= a))
+    for d, in_axes in zip(dims, params['in_axes']))
+  mapped_dims_in = tuple(
+    d if d is not_mapped else d - sum(a < d for a in in_axis.values())
+    for d, in_axis in zip(dims, params['in_axes']))
+  f, mapped_dims_out = batching.batch_subtrace(f, self.main, mapped_dims_in)
+  out_axes_thunk: Callable[[], Sequence[AxisNamePos]] = params['out_axes_thunk']
+  dims_out_thunk = lambda: tuple(d if d is not_mapped else _axis_after_insertion(d, out_axes)
+                                 for d, out_axes in zip(mapped_dims_out(), out_axes_thunk()))
+  # NOTE: This assumes that the choice of the dimensions over which outputs
+  #       are batched is entirely dependent on the function and not e.g. on the
+  #       data or its shapes.
+  @as_hashable_function(closure=out_axes_thunk)
+  def new_out_axes_thunk():
+    return tuple(
+      out_axes if d is not_mapped else
+      _fmap_dims(out_axes, lambda a, nd=_axis_after_insertion(d, out_axes): a + (nd <= a))
+      for out_axes, d in zip(out_axes_thunk(), mapped_dims_out()))
+
+  if not is_spmd:
+    assert params['spmd_in_axes'] is None and params['spmd_out_axes_thunk'] is None
+    new_spmd_in_axes = None
+    new_spmd_out_axes_thunk = None
   else:
-    assert len({x.shape[d] for x, d in zip(vals, dims) if d is not not_mapped}) == 1
-    new_in_axes = tuple(
-      _fmap_dims(in_axes, lambda a: a + (d is not not_mapped and d <= a))
-      for d, in_axes in zip(dims, params['in_axes']))
-    mapped_dims_in = tuple(
-      d if d is not_mapped else d - sum(a < d for a in in_axis.values())
-      for d, in_axis in zip(dims, params['in_axes']))
-    f, mapped_dims_out = batching.batch_subtrace(f, self.main, mapped_dims_in)
-    out_axes_thunk: Callable[[], Sequence[AxisNamePos]] = params['out_axes_thunk']
-    dims_out_thunk = lambda: tuple(d if d is not_mapped else _axis_after_insertion(d, out_axes)
-                                   for d, out_axes in zip(mapped_dims_out(), out_axes_thunk()))
-    # NOTE: This assumes that the choice of the dimensions over which outputs
-    #       are batched is entirely dependent on the function and not e.g. on the
-    #       data or its shapes.
-    @as_hashable_function(closure=out_axes_thunk)
-    def new_out_axes_thunk():
-      return tuple(
-        out_axes if d is not_mapped else
-        _fmap_dims(out_axes, lambda a, nd=_axis_after_insertion(d, out_axes): a + (nd <= a))
-        for out_axes, d in zip(out_axes_thunk(), mapped_dims_out()))
+    new_spmd_in_axes, new_spmd_out_axes_thunk = _batch_trace_update_spmd_axes(
+      params['spmd_in_axes'], params['spmd_out_axes_thunk'],
+      self.axis_name, dims, dims_out_thunk)
 
-    if not is_spmd:
-      assert params['spmd_in_axes'] is None and params['spmd_out_axes_thunk'] is None
-      new_spmd_in_axes = None
-      new_spmd_out_axes_thunk = None
-    else:
-      new_spmd_in_axes, new_spmd_out_axes_thunk = _batch_trace_update_spmd_axes(
-        params['spmd_in_axes'], params['spmd_out_axes_thunk'],
-        self.axis_name, dims, dims_out_thunk)
-
-    new_params = dict(params,
-                      in_axes=new_in_axes, out_axes_thunk=new_out_axes_thunk,
-                      spmd_in_axes=new_spmd_in_axes,
-                      spmd_out_axes_thunk=new_spmd_out_axes_thunk)
-    vals_out = primitive.bind(f, *vals, **new_params)
-    dims_out = dims_out_thunk()
-    return [batching.BatchTracer(self, v, d) for v, d in zip(vals_out, dims_out)]
+  new_params = dict(params,
+                    in_axes=new_in_axes, out_axes_thunk=new_out_axes_thunk,
+                    spmd_in_axes=new_spmd_in_axes,
+                    spmd_out_axes_thunk=new_spmd_out_axes_thunk)
+  vals_out = primitive.bind(f, *vals, **new_params)
+  dims_out = dims_out_thunk()
+  return [batching.BatchTracer(self, v, d) for v, d in zip(vals_out, dims_out)]
 batching.BatchTrace.process_xmap = partialmethod(_batch_trace_process_xmap, False)  # type: ignore
 pxla.SPMDBatchTrace.process_xmap = partialmethod(_batch_trace_process_xmap, True)  # type: ignore
 
@@ -1355,18 +1353,27 @@ def _xmap_lowering_rule_replica(ctx, *in_nodes,
                                      const_nodes, *tiled_ins,
                                      dim_var_values=ctx.dim_var_values)
 
-  outs = [
+  return [
       mlir.lower_fun(
-          partial(_untile, out_axes=ans_out_axes, axis_sizes=local_mesh_shape,
-                  platform=ctx.module_context.platform),
-          multiple_results=False)(
-              ctx.replace(primitive=None,
-                          avals_in=[vectorized_outvar.aval],
-                          avals_out=None), tiled_out)[0]
-      for v, vectorized_outvar, tiled_out, ans_out_axes
-      in zip(call_jaxpr.outvars, vectorized_jaxpr.outvars, tiled_outs,
-             mesh_out_axes)]
-  return outs
+          partial(
+              _untile,
+              out_axes=ans_out_axes,
+              axis_sizes=local_mesh_shape,
+              platform=ctx.module_context.platform,
+          ),
+          multiple_results=False,
+      )(
+          ctx.replace(primitive=None,
+                      avals_in=[vectorized_outvar.aval],
+                      avals_out=None),
+          tiled_out,
+      )[0] for v, vectorized_outvar, tiled_out, ans_out_axes in zip(
+          call_jaxpr.outvars,
+          vectorized_jaxpr.outvars,
+          tiled_outs,
+          mesh_out_axes,
+      )
+  ]
 
 
 def _xmap_lowering_rule_spmd(ctx, *global_in_nodes,
@@ -1670,11 +1677,10 @@ def _merge_leading_axis(x, axis: Optional[int]):
   if axis is None:
     # We assume that the output does not vary along the leading axis
     return lax.index_in_dim(x, 0, axis=0, keepdims=False)
-  else:
-    x_moved = moveaxis(x, 0, axis)
-    shape = list(x_moved.shape)
-    shape[axis:axis + 2] = [shape[axis] * shape[axis + 1]]
-    return x_moved.reshape(shape)
+  x_moved = moveaxis(x, 0, axis)
+  shape = list(x_moved.shape)
+  shape[axis:axis + 2] = [shape[axis] * shape[axis + 1]]
+  return x_moved.reshape(shape)
 
 
 def _slice_tile(x, dim: Optional[int], i, n: int):
@@ -1700,7 +1706,7 @@ def _unzip_axis_resources(axis_resources: Dict[AxisName, Tuple[ResourceAxisName,
         first_loop += 1
     physical_axis_resources[axis] = raxes[:first_loop]
     loop_resources = loop_axis_resources[axis] = raxes[first_loop:]
-    if not all(name in loop_resource_axes for name in loop_resources):
+    if any(name not in loop_resource_axes for name in loop_resources):
       raise NotImplementedError("Loop resources cannot appear before mesh axes "
                                 "in the resource_axis argument")
   return physical_axis_resources, loop_axis_resources
@@ -1716,8 +1722,7 @@ def _check_out_avals_vs_out_axes(out_avals: Sequence[core.AbstractValue],
         raise AssertionError(f"Only array abstract values can have non-empty "
                              f"out_axes, but {aval} has {axes}")
       continue
-    undeclared_axes = (set(aval.named_shape) - set(axes)) & defined_axes
-    if undeclared_axes:
+    if undeclared_axes := (set(aval.named_shape) - set(axes)) & defined_axes:
       undeclared_axes_str = sorted(str(axis) for axis in undeclared_axes)
       raise TypeError(f"One of xmap results has an out_axes specification of "
                       f"{axes.user_repr}, but is actually mapped along more axes "
@@ -1804,10 +1809,8 @@ def _fix_inferred_spmd_sharding(jaxpr, resource_env, gen_fresh_name = None):
   return jaxpr.replace(eqns=new_eqns)
 
 def _flatten_axes(what, tree, axes, tupled_args):
-  try:
+  with contextlib.suppress(ValueError):
     return tuple(flatten_axes(what, tree, axes, tupled_args=tupled_args))
-  except ValueError:
-    pass
   # Replace axis_resources with unparsed versions to avoid revealing internal details
   flatten_axes(what, tree, tree_map(lambda parsed: NoQuotesStr(parsed.user_repr), axes),
                tupled_args=tupled_args)

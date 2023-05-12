@@ -84,27 +84,24 @@ def save_anything_except_these_names(*names_not_to_save):
   """Save any values (not just named ones) excluding the names given."""
   names_not_to_save = frozenset(names_not_to_save)
   def policy(prim, *_, **params):
-    if prim is name_p:
-      return params['name'] not in names_not_to_save
-    return True  # allow saving anything which is not named
+    return params['name'] not in names_not_to_save if prim is name_p else True
+
   return policy
 
 def save_any_names_but_these(*names_not_to_save):
   """Save only named values, excluding the names given."""
   names_not_to_save = frozenset(names_not_to_save)
   def policy(prim, *_, **params):
-    if prim is name_p:
-      return params['name'] not in names_not_to_save
-    return False  # only allow saving named values
+    return params['name'] not in names_not_to_save if prim is name_p else False
+
   return policy
 
 def save_only_these_names(*names_which_can_be_saved):
   """Save only named values, and only among the names given."""
   names_which_can_be_saved = set(names_which_can_be_saved)
   def policy(prim, *_, **params):
-    if prim is name_p:
-      return params['name'] in names_which_can_be_saved
-    return False  # not saveable unless it's in the allow-list
+    return params['name'] in names_which_can_be_saved if prim is name_p else False
+
   return policy
 
 
@@ -298,8 +295,8 @@ remat = checkpoint  # alias
 def _remat_static_argnums(fun, static_argnums, args):
   if type(static_argnums) is int:
     static_argnums = (static_argnums,)
-  elif not (type(static_argnums) is tuple and
-            all(type(d) is int for d in static_argnums)):
+  elif type(static_argnums) is not tuple or any(
+        type(d) is not int for d in static_argnums):
     raise TypeError("the `static_argnums` argument to `jax.checkpoint` / "
                     "`jax.remat` must be an int, tuple of ints or, bool, but "
                     f"got value {static_argnums}")
@@ -406,11 +403,7 @@ def _saved_residuals(jaxpr, arg_info) -> List[Tuple[core.AbstractValue, str]]:
   res_lits = [x for x in jaxpr.outvars if     isinstance(x, core.Literal)]
   res_vars = {x for x in jaxpr.outvars if not isinstance(x, core.Literal)}
 
-  results = []
-
-  for x in res_lits:
-    results.append((x.aval, 'from a literal'))
-
+  results = [(x.aval, 'from a literal') for x in res_lits]
   for v in jaxpr.constvars:
     if v in res_vars:
       results.append((v.aval, 'from a constant'))
@@ -480,8 +473,7 @@ allowed_effects.add_type(lax_internal.InOutFeedEffect)
 
 def remat_partial_eval(trace, *tracers, jaxpr, **params):
   assert not jaxpr.constvars
-  disallowed_effects = allowed_effects.filter_not_in(jaxpr.effects)
-  if disallowed_effects:
+  if disallowed_effects := allowed_effects.filter_not_in(jaxpr.effects):
     raise NotImplementedError(
         'Effects not supported in partial-eval of `checkpoint`/`remat`: '
         f'{disallowed_effects}')
@@ -639,12 +631,11 @@ def remat_dce(used_outputs: List[bool], eqn: core.JaxprEqn
   new_params = dict(eqn.params, jaxpr=new_jaxpr)
   if not any(used_inputs) and not any(used_outputs) and not new_jaxpr.effects:
     return used_inputs, None
-  else:
-    new_eqn = pe.new_jaxpr_eqn(
-        [v for v, used in zip(eqn.invars, used_inputs) if used],
-        [v for v, used in zip(eqn.outvars, used_outputs) if used],
-        eqn.primitive, new_params, new_jaxpr.effects, eqn.source_info)
-    return used_inputs, new_eqn
+  new_eqn = pe.new_jaxpr_eqn(
+      [v for v, used in zip(eqn.invars, used_inputs) if used],
+      [v for v, used in zip(eqn.outvars, used_outputs) if used],
+      eqn.primitive, new_params, new_jaxpr.effects, eqn.source_info)
+  return used_inputs, new_eqn
 pe.dce_rules[remat_p] = remat_dce
 
 

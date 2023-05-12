@@ -44,7 +44,7 @@ class CliDebugger(cmd.Cmd):
   def evaluate(self, expr):
     env = {}
     curr_frame = self.frames[self.frame_index]
-    env.update(curr_frame.globals)
+    env |= curr_frame.globals
     env.update(curr_frame.locals)
     return eval(expr, {}, env)
 
@@ -56,8 +56,7 @@ class CliDebugger(cmd.Cmd):
       self._error_message()
 
   def print_backtrace(self):
-    backtrace = []
-    backtrace.append('Traceback:')
+    backtrace = ['Traceback:']
     for frame in self.frames[::-1]:
       backtrace.append(f'  File "{frame.filename}", line {frame.lineno}')
       if frame.offset is None:
@@ -69,8 +68,7 @@ class CliDebugger(cmd.Cmd):
 
   def print_context(self, num_lines=2):
     curr_frame = self.frames[self.frame_index]
-    context = []
-    context.append(f'> {curr_frame.filename}({curr_frame.lineno})')
+    context = [f'> {curr_frame.filename}({curr_frame.lineno})']
     for i, line in enumerate(curr_frame.source):
       assert curr_frame.offset is not None
       if (curr_frame.offset - 1 - num_lines <= i <=

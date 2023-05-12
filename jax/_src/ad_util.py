@@ -49,9 +49,7 @@ def add_abstract(xs, ys):
 jaxval_zeros_likers: Dict[type, Callable[[Any], Array]] = {}
 
 def instantiate(z: Union[Zero, Array]) -> Array:
-  if type(z) is Zero:
-    return zeros_like_aval(z.aval)
-  return cast(Array, z)
+  return zeros_like_aval(z.aval) if type(z) is Zero else cast(Array, z)
 
 def zeros_like_aval(aval: core.AbstractValue) -> Array:
   return aval_zeros_likers[type(aval)](aval)

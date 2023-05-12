@@ -140,10 +140,10 @@ _debugger_registry: Dict[str, Tuple[int, Debugger]] = {}
 def get_debugger(backend: Optional[str] = None) -> Debugger:
   if backend is not None and backend in _debugger_registry:
     return _debugger_registry[backend][1]
-  debuggers = sorted(_debugger_registry.values(), key=lambda x: -x[0])
-  if not debuggers:
+  if debuggers := sorted(_debugger_registry.values(), key=lambda x: -x[0]):
+    return debuggers[0][1]
+  else:
     raise ValueError("No debuggers registered!")
-  return debuggers[0][1]
 
 
 def register_debugger(name: str, debugger: Debugger, priority: int) -> None:

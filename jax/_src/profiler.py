@@ -179,7 +179,7 @@ def _host_perfetto_trace_file(path):
 
       # Once ui.perfetto.dev acquires trace.json from this server we can close
       # it down.
-      while httpd.__dict__.get('last_request') != '/' + filename:
+      while httpd.__dict__.get('last_request') != f'/{filename}':
         httpd.handle_request()
   finally:
     os.chdir(orig_directory)

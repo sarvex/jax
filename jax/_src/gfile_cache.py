@@ -29,10 +29,7 @@ class GFileCache(CacheInterface):
     if not key:
       raise ValueError("key cannot be empty")
     path_to_key = self._path / key
-    if path_to_key.exists():
-      return path_to_key.read_bytes()
-    else:
-      return None
+    return path_to_key.read_bytes() if path_to_key.exists() else None
 
   def put(self, key: str, value: bytes):
     """Adds new cache entry."""

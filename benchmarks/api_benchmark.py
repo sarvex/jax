@@ -61,8 +61,7 @@ def create_mesh(shape, axis_names, state):
     return None
   devices = sorted(jax.devices(), key=lambda d: d.id)
   mesh_devices = np.array(devices[:size]).reshape(shape)
-  global_mesh = jax.sharding.Mesh(mesh_devices, axis_names)
-  return global_mesh
+  return jax.sharding.Mesh(mesh_devices, axis_names)
 
 
 def swap(a, b):
@@ -367,10 +366,7 @@ def pmap_simple_8_devices(state):
 @required_devices(8)
 def pmap_simple_dispatch_8_devices_100_args(state):
   f = jax.pmap(lambda *args: args[1:] + (args[0] + 1,))
-  args = []
-  for i in range(100):
-    args.append(jnp.array(list(range(i, i+8))))
-
+  args = [jnp.array(list(range(i, i+8))) for i in range(100)]
   args = f(*args)
 
   while state:
@@ -381,10 +377,7 @@ def pmap_simple_dispatch_8_devices_100_args(state):
 @required_devices(8)
 def pmap_simple_8_devices_100_args(state):
   f = jax.pmap(lambda *args: args[1:] + (args[0] + 1,))
-  args = []
-  for i in range(100):
-    args.append(jnp.array(list(range(i, i+8))))
-
+  args = [jnp.array(list(range(i, i+8))) for i in range(100)]
   # Warmup loop.
   out = f(*args)
 
@@ -555,13 +548,12 @@ def bench_xla_abstractify():
       (np.arange(100, dtype=np.float32), 'numpy_arange_100_float32'),
       (AnEnum.B, 'enum'),
   ]
-  benchmarks = []
-  for a, name in _abstractify_args:
-    benchmarks.extend([
-        google_benchmark.register(
-            partial(_run_benchmark_for_xla_abstractify, a),
-            name=f'bench_xla_abstractify_{name}'),
-    ])
+  benchmarks = [
+      google_benchmark.register(
+          partial(_run_benchmark_for_xla_abstractify, a),
+          name=f'bench_xla_abstractify_{name}',
+      ) for a, name in _abstractify_args
+  ]
 bench_xla_abstractify()
 
 

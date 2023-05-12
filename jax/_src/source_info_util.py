@@ -61,10 +61,7 @@ class Transform(NamedTuple):
   name: str
 
   def wrap(self, stack: Tuple[str, ...]) -> Tuple[str, ...]:
-    if stack:
-      return (f'{self.name}({stack[0]})', *stack[1:])
-    else:
-      return ()
+    return (f'{self.name}({stack[0]})', *stack[1:]) if stack else ()
 
 @dataclasses.dataclass(frozen=True)
 class NameStack:
@@ -77,9 +74,7 @@ class NameStack:
     return NameStack(self.stack + scopes)
 
   def wrap_name(self, name: str) -> str:
-    if not self.stack:
-      return name
-    return f'{str(self)}/{name}'
+    return name if not self.stack else f'{str(self)}/{name}'
 
   def transform(self, transform_name: str) -> 'NameStack':
     return NameStack((*self.stack, Transform(transform_name)))

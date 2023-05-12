@@ -94,12 +94,11 @@ def setdiff1d(ar1: ArrayLike, ar2: ArrayLike, assume_unique: bool = False,
   mask = in1d(arr1, ar2, invert=True)
   if size is None:
     return arr1[mask]
-  else:
-    if not (assume_unique or size is None):
-      # Set mask to zero at locations corresponding to unique() padding.
-      n_unique = arr1.size + 1 - (arr1 == arr1[0]).sum()
-      mask = where(arange(arr1.size) < n_unique, mask, False)
-    return where(arange(size) < mask.sum(), arr1[where(mask, size=size)], fill_value)
+  if not assume_unique:
+    # Set mask to zero at locations corresponding to unique() padding.
+    n_unique = arr1.size + 1 - (arr1 == arr1[0]).sum()
+    mask = where(arange(arr1.size) < n_unique, mask, False)
+  return where(arange(size) < mask.sum(), arr1[where(mask, size=size)], fill_value)
 
 
 @_wraps(np.union1d,
@@ -167,10 +166,7 @@ def _intersect1d_sorted_mask(ar1: ArrayLike, ar2: ArrayLike, return_indices: boo
     aux = sort(ar)
 
   mask = aux[1:] == aux[:-1]
-  if return_indices:
-    return aux, mask, indices
-  else:
-    return aux, mask
+  return (aux, mask, indices) if return_indices else (aux, mask)
 
 
 @_wraps(np.intersect1d)
@@ -180,17 +176,16 @@ def intersect1d(ar1: ArrayLike, ar2: ArrayLike, assume_unique: bool = False,
   ar1 = core.concrete_or_error(None, ar1, "The error arose in intersect1d()")
   ar2 = core.concrete_or_error(None, ar2, "The error arose in intersect1d()")
 
-  if not assume_unique:
-    if return_indices:
-      ar1, ind1 = unique(ar1, return_index=True)
-      ar2, ind2 = unique(ar2, return_index=True)
-    else:
-      ar1 = unique(ar1)
-      ar2 = unique(ar2)
-  else:
+  if assume_unique:
     ar1 = ravel(ar1)
     ar2 = ravel(ar2)
 
+  elif return_indices:
+    ar1, ind1 = unique(ar1, return_index=True)
+    ar2, ind2 = unique(ar2, return_index=True)
+  else:
+    ar1 = unique(ar1)
+    ar2 = unique(ar2)
   if return_indices:
     aux, mask, aux_sort_indices = _intersect1d_sorted_mask(ar1, ar2, return_indices)
   else:
@@ -265,8 +260,8 @@ def _unique(ar: Array, axis: int, return_index: bool = False, return_inverse: bo
 
   aux, mask, perm = _unique_sorted_mask(ar, axis)
   if size is None:
-    ind = core.concrete_or_error(None, mask,
-        "The error arose in jnp.unique(). " + UNIQUE_SIZE_HINT)
+    ind = core.concrete_or_error(
+        None, mask, f"The error arose in jnp.unique(). {UNIQUE_SIZE_HINT}")
   else:
     ind = nonzero(mask, size=size)[0]
   result = aux[ind] if aux.size else aux
@@ -282,10 +277,7 @@ def _unique(ar: Array, axis: int, return_index: bool = False, return_inverse: bo
 
   ret: Tuple[Array, ...] = (result,)
   if return_index:
-    if aux.size:
-      ret += (perm[ind],)
-    else:
-      ret += (perm,)
+    ret += (perm[ind], ) if aux.size else (perm, )
   if return_inverse:
     if aux.size:
       imask = cumsum(mask) - 1
@@ -330,11 +322,17 @@ def unique(ar: ArrayLike, return_index: bool = False, return_inverse: bool = Fal
            *, size: Optional[int] = None, fill_value: Optional[ArrayLike] = None):
   check_arraylike("unique", ar)
   if size is None:
-    ar = core.concrete_or_error(None, ar,
-        "The error arose for the first argument of jnp.unique(). " + UNIQUE_SIZE_HINT)
+    ar = core.concrete_or_error(
+        None,
+        ar,
+        f"The error arose for the first argument of jnp.unique(). {UNIQUE_SIZE_HINT}",
+    )
   else:
-    size = core.concrete_or_error(operator.index, size,
-         "The error arose for the size argument of jnp.unique(). " + UNIQUE_SIZE_HINT)
+    size = core.concrete_or_error(
+        operator.index,
+        size,
+        f"The error arose for the size argument of jnp.unique(). {UNIQUE_SIZE_HINT}",
+    )
   arr = asarray(ar)
   if axis is None:
     axis = 0

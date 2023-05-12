@@ -162,8 +162,7 @@ class CustomTransposePrimitive(core.Primitive):
     # typically receives unknowns)
     top_trace = core.find_top_trace(args)
     tracers = map(top_trace.full_raise, args)
-    outs = top_trace.process_custom_transpose(self, call, tracers, **params)
-    return outs
+    return top_trace.process_custom_transpose(self, call, tracers, **params)
 
   # TODO(frostig,mattjj): consider keeping `call` as a named parameter
   # instead of following this "call primitive" convention.

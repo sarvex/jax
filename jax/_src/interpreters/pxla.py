@@ -145,8 +145,7 @@ shard_arg_handlers: Dict[Any, Callable[[Any, Any, Any, Any], Any]] = {}
 def _shard_token(x, devices, indices, sharding):
   zeros = np.zeros((), dtype=np.dtype(np.bool_))
   aval = api_util.shaped_abstractify(zeros)
-  out = batched_device_put(aval, sharding, [zeros for i in indices], devices)
-  return out
+  return batched_device_put(aval, sharding, [zeros for _ in indices], devices)
 shard_arg_handlers[core.Token] = _shard_token
 
 def _masked_array_error(x, devices, indices, sharding):
@@ -158,8 +157,7 @@ def _shard_array(x, devices, indices, sharding):
   if x.dtype == dtypes.float0:
     x = np.zeros(x.shape, dtype=np.dtype(bool))
   aval = api_util.shaped_abstractify(x)
-  out = batched_device_put(aval, sharding, [x[i] for i in indices], devices)
-  return out
+  return batched_device_put(aval, sharding, [x[i] for i in indices], devices)
 for _t in array_types:
   shard_arg_handlers[_t] = _shard_array
 
@@ -168,8 +166,7 @@ def shard_device_array(x, devices, indices, sharding):
       as_slice_indices(x, idx) for idx in indices)
   shards = x._multi_slice(start_indices, limit_indices, removed_dims)
   aval = api_util.shaped_abstractify(x)
-  out = batched_device_put(aval, sharding, shards, devices)
-  return out
+  return batched_device_put(aval, sharding, shards, devices)
 
 def batched_device_put(aval: core.ShapedArray,
                        sharding: jax.sharding.Sharding, xs: Sequence[Any],
@@ -397,8 +394,8 @@ def xla_pmap_impl_lazy(
     donated_invars: Sequence[bool],
     is_explicit_global_axis_size: bool,
 ) -> Callable:
-  if (config.jax_disable_jit and config.jax_eager_pmap and
-      not is_explicit_global_axis_size and not any(d for d in donated_invars)):
+  if (config.jax_disable_jit and config.jax_eager_pmap
+      and not is_explicit_global_axis_size and not any(donated_invars)):
     def _emap_apply_fn(*args):
       return _emap_impl(fun, *args, backend=backend, axis_name=axis_name,
                         axis_size=axis_size, global_axis_size=global_axis_size,
@@ -444,7 +441,7 @@ def _emap_impl(fun: lu.WrappedFun, *args,
                ):
   from jax._src import array
   # TODO(sharadmv,mattjj): implement these cases
-  if any(d for d in donated_invars):
+  if any(donated_invars):
     raise NotImplementedError("Buffer donation not supported in eager pmap.")
   if is_explicit_global_axis_size:
     raise NotImplementedError("Non-default global_axis_size not supported in "
@@ -700,7 +697,7 @@ class ParallelCallableInfo:
     if self.devices:
       out = [d for d in self.devices
              if d.process_index == xb.process_index(self.backend)]
-      assert len(out) > 0
+      assert out
     else:
       out = None  # type: ignore
     return out
@@ -806,18 +803,17 @@ def lower_parallel_callable(
 
   no_nested_sharding = False
   must_run_on_all_devices = False
-  if not is_explicit_global_axis_size:
-    if xb.process_count(backend) > 1:
-      if devices:
-        # This allows each host in a multi-host pmap to run on a different number
-        # of devices, but precludes nested sharding (i.e. inner pmaps).
-        no_nested_sharding = True
-      else:
-        # This assumes all hosts run on the same number of devices. We make sure
-        # this assumption is true by requiring that the pmap is run on all devices
-        # (and making the further assumption that each host has the same number of
-        # devices). Nested sharding is ok in this case.
-        must_run_on_all_devices = True
+  if not is_explicit_global_axis_size and xb.process_count(backend) > 1:
+    if devices:
+      # This allows each host in a multi-host pmap to run on a different number
+      # of devices, but precludes nested sharding (i.e. inner pmaps).
+      no_nested_sharding = True
+    else:
+      # This assumes all hosts run on the same number of devices. We make sure
+      # this assumption is true by requiring that the pmap is run on all devices
+      # (and making the further assumption that each host has the same number of
+      # devices). Nested sharding is ok in this case.
+      must_run_on_all_devices = True
 
   pci = ParallelCallableInfo(
       name, backend, axis_name, axis_size, global_axis_size, devices,
@@ -955,13 +951,18 @@ class UnloadedPmapExecutable:
                                                  self.output_shardings)
     handle_args = InputsHandler(self.compiled.local_devices(),
                                 self.input_shardings, input_indices)
-    execute_fun = ExecuteReplicated(self.compiled, "parallel computation",
-                                    self.backend, handle_args, handle_outs,
-                                    self.unordered_effects,
-                                    self.ordered_effects, self.keepalive,
-                                    bool(self.host_callbacks),
-                                    set(range(len(input_indices))))
-    return execute_fun
+    return ExecuteReplicated(
+        self.compiled,
+        "parallel computation",
+        self.backend,
+        handle_args,
+        handle_outs,
+        self.unordered_effects,
+        self.ordered_effects,
+        self.keepalive,
+        bool(self.host_callbacks),
+        set(range(len(input_indices))),
+    )
 
   def load(self) -> PmapExecutable:
     fingerprint = getattr(self.compiled, "fingerprint", None)
@@ -1249,8 +1250,8 @@ def replicate(val, axis_size, nrep, devices=None, backend=None, in_axis=0):
     msg = ("Cannot replicate across %d replicas because only %d local devices "
            "are available." % (nrep, device_count))
     if devices:
-      msg += (" (local devices = %s)"
-              % ", ".join(map(str, devices)) if devices else str(None))
+      msg += (f' (local devices = {", ".join(map(str, devices))})'
+              if devices else str(None))
     raise ValueError(msg)
 
   if devices is None:
@@ -1269,8 +1270,8 @@ def replicate(val, axis_size, nrep, devices=None, backend=None, in_axis=0):
       nrep, axis_size, aval.shape, in_axis)
 
   buf = jax.device_put(val, devices[0])
-  sharding = sharding_impls.PmapSharding(
-      np.asarray([d for d in devices]), sharding_spec)
+  sharding = sharding_impls.PmapSharding(np.asarray(list(devices)),
+                                         sharding_spec)
   return batched_device_put(replicated_aval, sharding, [buf] * len(devices),
                             devices)
 
@@ -1395,12 +1396,11 @@ def _pmap_dce_rule(used_outputs, eqn):
                     in_axes=tuple(in_axes), out_axes=tuple(out_axes))
   if not any(used_inputs) and not any(used_outputs) and not new_jaxpr.effects:
     return used_inputs, None
-  else:
-    new_eqn = pe.new_jaxpr_eqn(
-        [v for v, used in zip(eqn.invars, used_inputs) if used],
-        [v for v, used in zip(eqn.outvars, used_outputs) if used],
-        eqn.primitive, new_params, new_jaxpr.effects, eqn.source_info)
-    return used_inputs, new_eqn
+  new_eqn = pe.new_jaxpr_eqn(
+      [v for v, used in zip(eqn.invars, used_inputs) if used],
+      [v for v, used in zip(eqn.outvars, used_outputs) if used],
+      eqn.primitive, new_params, new_jaxpr.effects, eqn.source_info)
+  return used_inputs, new_eqn
 
 
 # Set param update handlers to update `donated_invars` just like xla_call_p
@@ -1531,10 +1531,16 @@ def _pmap_lowering(ctx, *in_nodes, axis_name,
                                          *in_nodes_sharded,
                                          dim_var_values=ctx.dim_var_values)
   out_avals = [v.aval for v in call_jaxpr.outvars]
-  outs = [_hlo_unshard(ctx, aval, new_env, out_axis, shard,
-                        platform=ctx.module_context.platform)
-          for aval, out_axis, shard in zip(out_avals, out_axes, sharded_outs)]
-  return outs
+  return [
+      _hlo_unshard(
+          ctx,
+          aval,
+          new_env,
+          out_axis,
+          shard,
+          platform=ctx.module_context.platform,
+      ) for aval, out_axis, shard in zip(out_avals, out_axes, sharded_outs)
+  ]
 
 mlir.register_lowering(xla_pmap_p, _pmap_lowering)
 
@@ -1617,7 +1623,9 @@ def manual_proto(
   axis_order = {axis: i for i, axis in enumerate(mesh.axis_names)}
 
   manual_axes = list(sorted(manual_axes_set, key=str))
-  replicated_axes = list(axis for axis in mesh.axis_names if axis not in manual_axes_set)
+  replicated_axes = [
+      axis for axis in mesh.axis_names if axis not in manual_axes_set
+  ]
 
   tad_perm = ([axis_order[a] for a in replicated_axes] +
               [axis_order[a] for a in manual_axes])
@@ -1672,9 +1680,10 @@ def vtile_manual(manual_axes: FrozenSet[sharding_impls.MeshAxisName],
   tiled_args = [full_to_shard_p.bind(arg, axes=axes, mesh=mesh, manual_axes=manual_axes)
                 for arg, axes in zip(args, in_axes)]
   tiled_outs = yield tiled_args, {}
-  outs = [shard_to_full_p.bind(out, axes=axes, mesh=mesh, manual_axes=manual_axes)
-          for out, axes in zip(tiled_outs, out_axes)]
-  yield outs
+  yield [
+      shard_to_full_p.bind(out, axes=axes, mesh=mesh, manual_axes=manual_axes)
+      for out, axes in zip(tiled_outs, out_axes)
+  ]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1691,10 +1700,7 @@ TilingMethod = Union[TileVectorize, TileManual]
 def check_if_any_auto(
     shardings: Iterable[Union[sharding_impls.XLACompatibleSharding,
                               AUTOAxisResource, UnspecifiedValue]]) -> bool:
-  for s in shardings:
-    if is_auto(s):
-      return True
-  return False
+  return any(is_auto(s) for s in shardings)
 
 class MismatchType(enum.Enum):
   ARG_SHARDING = 0
@@ -1766,11 +1772,7 @@ def _get_and_check_device_assignment(
     devices: Optional[Sequence[xc.Device]],
 ) -> Tuple[xc.Client, Tuple[xc.Device, ...]]:
   first_sharding_info = None
-  if devices is None:
-    devices = ()
-  else:
-    devices = tuple(devices)
-
+  devices = () if devices is None else tuple(devices)
   for i, s_type, source_info in shardings:
     if is_auto(i) or is_unspecified(i):
       continue
@@ -1779,16 +1781,15 @@ def _get_and_check_device_assignment(
     if first_sharding_info is None:
       first_sharding_info = (i._device_assignment, s_type, source_info)  # type: ignore
     arr_device_assignment = i._device_assignment  # type: ignore
-    if not devices:
-      if first_sharding_info[0] != arr_device_assignment:
-        raise DeviceAssignmentMismatchError([
-            DeviceAssignmentMismatch(*first_sharding_info),
-            DeviceAssignmentMismatch(arr_device_assignment, s_type, source_info)])
-    else:
+    if devices:
       if devices != arr_device_assignment:
         raise DeviceAssignmentMismatchError([
             DeviceAssignmentMismatch(devices, MismatchType.CONTEXT_DEVICES, None),
             DeviceAssignmentMismatch(arr_device_assignment, s_type, source_info)])
+    elif first_sharding_info[0] != arr_device_assignment:
+      raise DeviceAssignmentMismatchError([
+          DeviceAssignmentMismatch(*first_sharding_info),
+          DeviceAssignmentMismatch(arr_device_assignment, s_type, source_info)])
   if first_sharding_info is None and devices:
     final_device_assignment = devices
   elif first_sharding_info is None:
@@ -1911,10 +1912,9 @@ def _cached_lowering_to_hlo(closed_jaxpr, api_name, fun_name, backend,
 
   module_name = f"{api_name}_{fun_name}"
 
-  if len(device_assignment) > 1:
-    if any(effects.ordered_effects.contains(eff) for eff
-           in closed_jaxpr.effects):
-      raise ValueError("Ordered effects are not supported for more than 1 device.")
+  if len(device_assignment) > 1 and any(
+      effects.ordered_effects.contains(eff) for eff in closed_jaxpr.effects):
+    raise ValueError("Ordered effects are not supported for more than 1 device.")
   ordered_effects = list(effects.ordered_effects.filter_in(closed_jaxpr.effects))
   lowering_result = mlir.lower_jaxpr_to_module(
       module_name,
@@ -2055,9 +2055,9 @@ def lower_sharding_computation(
   # Computations that only produce constants and/or only rearrange their inputs,
   # which are often produced from partial evaluation, don't need compilation,
   # and don't need to evaluate their arguments.
-  if (not always_lower and not (jaxpr.effects or has_outfeed) and
-      (not jaxpr.eqns and all(kept_outputs) or not jaxpr.outvars) and
-      all(is_unspecified(o) for o in out_shardings)):
+  if (not always_lower and not jaxpr.effects and not has_outfeed
+      and (not jaxpr.eqns and all(kept_outputs) or not jaxpr.outvars)
+      and all(is_unspecified(o) for o in out_shardings)):
     return MeshComputation(
         str(name_stack), None, True, donated_invars, jaxpr=jaxpr,
         consts=closed_jaxpr.consts, global_in_avals=global_in_avals,
@@ -2354,12 +2354,11 @@ def _get_input_indices(
   for aval, sharding in zip(avals, shardings):
     if aval is core.abstract_token:
       index = _get_replicated_slices(num_addressable_devices, None)
+    elif sharding.is_fully_replicated:
+      index = _get_replicated_slices(num_addressable_devices, aval.ndim)
     else:
-      if sharding.is_fully_replicated:
-        index = _get_replicated_slices(num_addressable_devices, aval.ndim)
-      else:
-        index = tuple(
-            sharding.addressable_devices_indices_map(aval.shape).values())  # type: ignore
+      index = tuple(
+          sharding.addressable_devices_indices_map(aval.shape).values())  # type: ignore
     input_indices.append(index)
 
   return input_indices
@@ -2391,7 +2390,7 @@ def get_gspmd_shardings_from_executable(
   # put the sharding on ROOT instead of the tuple.
   # TODO(b/245667823): Remove this when XLA fixes this.
   if len(out_shardings_xla) == 1 and len(out_shardings_xla) < num_out_avals:
-    out_shardings_xla = out_shardings_xla * num_out_avals
+    out_shardings_xla *= num_out_avals
   assert len(out_shardings_xla) == num_out_avals, (
       len(out_shardings_xla), num_out_avals)
   return in_shardings_xla, out_shardings_xla
@@ -2582,11 +2581,18 @@ class UnloadedMeshExecutable:
         self.output_avals, self.output_shardings, self.committed,
         self.are_out_shardings_from_xla)  # type: ignore  # arg-type
 
-    unsafe_call = ExecuteReplicated(  # type: ignore  # assignment
-        self.xla_executable, self.name, self.backend, handle_args,
-        handle_outs, self.unordered_effects, self.ordered_effects, self.keepalive,
-        bool(self.host_callbacks), self.kept_var_idx)
-    return unsafe_call
+    return ExecuteReplicated(  # type: ignore  # assignment
+        self.xla_executable,
+        self.name,
+        self.backend,
+        handle_args,
+        handle_outs,
+        self.unordered_effects,
+        self.ordered_effects,
+        self.keepalive,
+        bool(self.host_callbacks),
+        self.kept_var_idx,
+    )
 
   def load(self) -> MeshExecutable:
     return MeshExecutable(self.xla_executable, self.build_unsafe_call,
@@ -2797,9 +2803,9 @@ class MeshExecutable(stages.XlaExecutable):
     return self._out_shardings
 
   def create_cpp_call(self, no_kwargs, in_tree, out_tree):
-    if not (isinstance(self.unsafe_call, ExecuteReplicated) and
-            not self.unsafe_call.has_unordered_effects and
-            not self.unsafe_call.has_host_callbacks):
+    if (not isinstance(self.unsafe_call, ExecuteReplicated)
+        or self.unsafe_call.has_unordered_effects
+        or self.unsafe_call.has_host_callbacks):
       return None
 
     def aot_cache_miss(*args, **kwargs):
@@ -2830,13 +2836,12 @@ def check_arg_avals_for_call(ref_avals, arg_avals,
         f"but called with {len(arg_avals)}")
   arg_names = ([''] * len(ref_avals) if jaxpr_debug_info is None else
                jaxpr_debug_info.arg_names)
-  errors = []
-  num_errors = 5
-  for ref_aval, arg_aval, name in safe_zip(ref_avals, arg_avals, arg_names):
-    if not core.typematch(ref_aval, arg_aval):
-      errors.append(f"Compiled with {ref_aval} and called with {arg_aval} for "
-                    f"arg {name}")
-  if errors:
+  if errors := [
+      f"Compiled with {ref_aval} and called with {arg_aval} for arg {name}"
+      for ref_aval, arg_aval, name in safe_zip(ref_avals, arg_avals, arg_names)
+      if not core.typematch(ref_aval, arg_aval)
+  ]:
+    num_errors = 5
     str_errors = '\n'.join(errors[:num_errors])
     num_mismatch_str = (
         f'the {len(errors)} mismatches' if len(errors) < num_errors else
@@ -2881,10 +2886,11 @@ def _out_shardings_for_trivial(
     rep = sharding_impls.SingleDeviceSharding(dev)
     in_shardings = (sharding_impls.SingleDeviceSharding(dev),) * len(in_shardings)
 
-  shardings: Dict[core.Var, sharding_impls.XLACompatibleSharding] = {}
-  for constvar, constval in zip(jaxpr.constvars, consts):
-    if isinstance(constval, array.ArrayImpl):
-      shardings[constvar] = constval.sharding
+  shardings: Dict[core.Var, sharding_impls.XLACompatibleSharding] = {
+      constvar: constval.sharding
+      for constvar, constval in zip(jaxpr.constvars, consts)
+      if isinstance(constval, array.ArrayImpl)
+  }
   map(shardings.setdefault, jaxpr.invars, in_shardings)
   return [rep if isinstance(x, core.Literal) else shardings.get(x, rep)
           for x in jaxpr.outvars]
@@ -2981,7 +2987,6 @@ def check_gda_or_array_xla_sharding_match(
   arg_names = ([''] * len(args) if jaxpr_debug_info is None else
                jaxpr_debug_info.arg_names)
   errors = []
-  num_errors = 5
   for arg, xs, name in safe_zip(args, in_xla_shardings, arg_names):
     if not isinstance(arg, ArrayImpl):
       continue
@@ -2998,6 +3003,7 @@ def check_gda_or_array_xla_sharding_match(
           f"arg {name} with shape: {arg.aval.str_short()}")
 
   if errors:
+    num_errors = 5
     str_errors = '\n'.join(errors[:num_errors])
     num_mismatch_str = (
         f'the {len(errors)} mismatches' if len(errors) < num_errors else
@@ -3082,16 +3088,16 @@ def mesh_sharding_specs(axis_sizes, axis_names, allow_uneven_axes=False):
     # NOTE: sorted is stable, which is important when multiple resources
     #       map to the same axis.
     for name, axis in sorted(aval_axes.items(), key=lambda x: x[1]):
-      if not allow_uneven_axes:
-        if aval_shape[axis] % axis_sizes[name] != 0:
-          raise ValueError(
-            f'The aval shape on dimension {axis} is {aval_shape[axis]} and '
-            f'the size of axis {name} is {axis_sizes[name]}. The aval shape % '
-            'axis size should be zero but got '
-            f'{aval_shape[axis] % axis_sizes[name]}')
+      if not allow_uneven_axes and aval_shape[axis] % axis_sizes[name] != 0:
+        raise ValueError(
+          f'The aval shape on dimension {axis} is {aval_shape[axis]} and '
+          f'the size of axis {name} is {axis_sizes[name]}. The aval shape % '
+          'axis size should be zero but got '
+          f'{aval_shape[axis] % axis_sizes[name]}')
       aval_shape[axis] //= axis_sizes[name]
     return sharding_specs.make_sharding_spec(
         axis_sizes, mesh_axis_pos, len(aval.shape), aval_axes)
+
   return mk_sharding_spec
 
 

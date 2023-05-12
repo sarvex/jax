@@ -65,10 +65,10 @@ _default_tolerance = {
   np.dtype(np.complex128): 1e-15,
 }
 if _fp8_enabled:
-  _default_tolerance.update({
-    np.dtype(_dtypes.float8_e4m3fn): 1e-1,
-    np.dtype(_dtypes.float8_e5m2): 1e-1,
-  })
+  _default_tolerance |= {
+      np.dtype(_dtypes.float8_e4m3fn): 1e-1,
+      np.dtype(_dtypes.float8_e5m2): 1e-1,
+  }
 
 
 def default_tolerance():
@@ -89,10 +89,10 @@ default_gradient_tolerance = {
   np.dtype(np.complex128): 1e-5,
 }
 if _fp8_enabled:
-  default_gradient_tolerance.update({
-    np.dtype(_dtypes.float8_e4m3fn): 1e-1,
-    np.dtype(_dtypes.float8_e5m2): 1e-1,
-  })
+  default_gradient_tolerance |= {
+      np.dtype(_dtypes.float8_e4m3fn): 1e-1,
+      np.dtype(_dtypes.float8_e5m2): 1e-1,
+  }
 
 def is_python_scalar(val):
   return not isinstance(val, np.generic) and isinstance(val, (bool, int, float, complex))

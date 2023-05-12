@@ -87,7 +87,7 @@ def op_sharding_to_numpy_indices(
       raise AssertionError('Unrecognized number of shards. Please file a bug!')
 
   device_it = iter(op_sharding.tile_assignment_devices)
-  for i, idxs in enumerate(itertools.product(*axis_indices)):
+  for idxs in itertools.product(*axis_indices):
     for _ in range(num_replicas):
       indices[next(device_it)] = idxs
   return indices

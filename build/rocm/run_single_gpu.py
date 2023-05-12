@@ -32,9 +32,9 @@ def run_shell_command(cmd, shell=False, env_vars={}):
                           capture_output=True,
                           env=env)
   if result.returncode != 0:
-    print("FAILED - {}".format(" ".join(cmd)))
+    print(f'FAILED - {" ".join(cmd)}')
     print(result.stderr.decode())
-    # sys.exit(result.returncode)
+      # sys.exit(result.returncode)
   return result.returncode, result.stderr.decode(), result.stdout.decode()
 
 
@@ -48,9 +48,8 @@ def collect_testmodules():
     print("Test module discovery failed.")
     exit(return_code)
   for line in stdout.split("\n"):
-    match = re.match("<Module (.*)>", line)
-    if match:
-      test_file = match.group(1)
+    if match := re.match("<Module (.*)>", line):
+      test_file = match[1]
       all_test_files.append(test_file)
   print("---------- collected test modules ----------")
   print("Found %d test modules." % (len(all_test_files)))

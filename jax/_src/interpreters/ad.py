@@ -63,9 +63,8 @@ def jvp(fun: lu.WrappedFun, has_aux=False, instantiate=True,
     transform_stack=True) -> Any:
   if not has_aux:
     return jvpfun(jvp_subtrace(fun), instantiate, transform_stack)
-  else:
-    fun, aux = jvp_subtrace_aux(fun)
-    return jvpfun(fun, instantiate, transform_stack), aux
+  fun, aux = jvp_subtrace_aux(fun)
+  return jvpfun(fun, instantiate, transform_stack), aux
 
 
 @lu.transformation
@@ -149,25 +148,18 @@ def vjp(traceable, primals, has_aux=False, reduce_axes=()):
   # Ensure that vjp_ is a PyTree so that we can pass it from the forward to the backward
   # pass in a custom VJP.
   vjp_ =  Partial(partial(unbound_vjp, pvals, jaxpr), consts)
-  if not has_aux:
-    return out_primals, vjp_
-  else:
-    return out_primals, vjp_, aux
+  return (out_primals, vjp_) if not has_aux else (out_primals, vjp_, aux)
 
 def unpair_pval(pval):
   aval, const = pval
   const_1, const_2 = const
   if aval is None:
     return (None, const_1), (None, const_2)
-  else:
-    aval_1, aval_2 = aval
-    return (aval_1, const_1), (aval_2, const_2)
+  aval_1, aval_2 = aval
+  return (aval_1, const_1), (aval_2, const_2)
 
 def replace_float0s(primal, tangent):
-  if dtype(tangent) == float0:
-    return zeros_like_jaxval(primal)
-  else:
-    return tangent
+  return zeros_like_jaxval(primal) if dtype(tangent) == float0 else tangent
 
 def recast_to_float0(primal, tangent):
   if core.primal_dtype_to_tangent_dtype(dtype(primal)) == float0:
@@ -210,12 +202,11 @@ def backward_pass(jaxpr: core.Jaxpr, reduce_axes, transform_stack,
   def read_primal(v):
     if type(v) is Literal:
       return v.val
-    else:
-      a = v.aval
-      if type(a) is core.DShapedArray:
-        shape = [primal_env[d] if type(d) is core.Var else d for d in a.shape]
-        a = a.update(shape=tuple(shape))
-      return primal_env.get(v, UndefinedPrimal(a))
+    a = v.aval
+    if type(a) is core.DShapedArray:
+      shape = [primal_env[d] if type(d) is core.Var else d for d in a.shape]
+      a = a.update(shape=tuple(shape))
+    return primal_env.get(v, UndefinedPrimal(a))
 
   def write_primal(v, val):
     if not is_undefined_primal(val):
@@ -284,8 +275,8 @@ def get_primitive_transpose(p):
     return primitive_transposes[p]
   except KeyError as err:
     raise NotImplementedError(
-        "Transpose rule (for reverse-mode differentiation) for '{}' "
-        "not implemented".format(p)) from err
+        f"Transpose rule (for reverse-mode differentiation) for '{p}' not implemented"
+    ) from err
 
 @lu.transformation_with_aux
 def nonzero_tangent_outputs(*args, **kwargs):
@@ -468,10 +459,7 @@ class JVPTracer(Tracer):
     return get_aval(self.primal)
 
   def full_lower(self):
-    if type(self.tangent) is Zero:
-      return core.full_lower(self.primal)
-    else:
-      return self
+    return core.full_lower(self.primal) if type(self.tangent) is Zero else self
 
 def _primal_tangent_shapes_match(primal, tangent):
   if type(tangent) is not Zero:
@@ -501,12 +489,11 @@ def deflinear(primitive, transpose_rule):
 def linear_jvp(primitive, primals, tangents, **params):
   val_out = primitive.bind(*primals, **params)
   if all(type(tangent) is Zero for tangent in tangents):
-    if primitive.multiple_results:
-      return val_out, map(Zero.from_value, val_out)
-    return val_out, Zero.from_value(val_out)
-  else:
-    tangents = map(instantiate_zeros, tangents)
-    return val_out, primitive.bind(*tangents, **params)
+    return ((val_out,
+             map(Zero.from_value, val_out)) if primitive.multiple_results else
+            (val_out, Zero.from_value(val_out)))
+  tangents = map(instantiate_zeros, tangents)
+  return val_out, primitive.bind(*tangents, **params)
 
 def linear_transpose(transpose_rule, cotangent, *args, **kwargs):
   return Zero if type(cotangent) is Zero else transpose_rule(cotangent, **kwargs)
@@ -584,19 +571,15 @@ deflinear2(zeros_like_p, lambda t, _: [Zero.from_value(t)])
 deflinear2(add_jaxvals_p, lambda t, *args: (t, t))
 
 def instantiate_zeros(tangent):
-  if type(tangent) is Zero:
-    return zeros_like_aval(tangent.aval)
-  else:
-    return tangent
+  return zeros_like_aval(tangent.aval) if type(tangent) is Zero else tangent
 
 # This function seems similar to instantiate_zeros, but it is sometimes used
 # to instantiate zero abstract units with a different aval
 def instantiate_zeros_aval(aval, tangent):
-  if type(tangent) is Zero:
-    assert tangent.aval == aval
-    return zeros_like_aval(aval)
-  else:
+  if type(tangent) is not Zero:
     return tangent
+  assert tangent.aval == aval
+  return zeros_like_aval(aval)
 
 @lu.transformation_with_aux
 def traceable(in_tree, *primals_and_tangents):
@@ -618,8 +601,7 @@ def call_transpose(primitive, params, call_jaxpr, args, ct, _, reduce_axes):
   fun = lu.hashable_partial(lu.wrap_init(backward_pass), call_jaxpr,
                             reduce_axes, False)
   fun, out_tree = flatten_fun_nokwargs(fun, in_tree_def)
-  update_params = call_transpose_param_updaters.get(primitive)
-  if update_params:
+  if update_params := call_transpose_param_updaters.get(primitive):
     params = update_params(params, map(is_undefined_primal, args),
                            [type(x) is not Zero for x in ct])
   if config.jax_dynamic_shapes:

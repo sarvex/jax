@@ -139,8 +139,8 @@ def PRNGKey(seed: Union[int, Array]) -> KeyArray:
 # TODO(frostig): remove once we always enable_custom_prng
 def _check_default_impl_with_no_custom_prng(impl, name):
   default_impl = default_prng_impl()
-  default_name = config.jax_default_prng_impl
   if not config.jax_enable_custom_prng and default_impl is not impl:
+    default_name = config.jax_default_prng_impl
     raise RuntimeError('jax_enable_custom_prng must be enabled in order '
                        f'to seed an RNG with an implementation "f{name}" '
                        f'differing from the default "f{default_name}".')
@@ -580,16 +580,15 @@ def normal(key: KeyArray,
 
 @partial(jit, static_argnums=(1, 2), inline=True)
 def _normal(key, shape, dtype) -> Array:
-  if dtypes.issubdtype(dtype, np.complexfloating):
-    sqrt2 = np.array(np.sqrt(2), dtype)
-
-    key_re, key_im = _split(key)
-    real_dtype = np.array(0, dtype).real.dtype
-    _re = _normal_real(key_re, shape, real_dtype).astype(dtype)
-    _im = _normal_real(key_im, shape, real_dtype).astype(dtype)
-    return (_re + 1j * _im) / sqrt2
-  else:
+  if not dtypes.issubdtype(dtype, np.complexfloating):
     return _normal_real(key, shape, dtype) # type: ignore
+  sqrt2 = np.array(np.sqrt(2), dtype)
+
+  key_re, key_im = _split(key)
+  real_dtype = np.array(0, dtype).real.dtype
+  _re = _normal_real(key_re, shape, real_dtype).astype(dtype)
+  _im = _normal_real(key_im, shape, real_dtype).astype(dtype)
+  return (_re + 1j * _im) / sqrt2
 
 @partial(jit, static_argnums=(1, 2), inline=True)
 def _normal_real(key, shape, dtype) -> Array:
@@ -651,10 +650,10 @@ def multivariate_normal(key: KeyArray,
 
 @partial(jit, static_argnums=(3, 4, 5), inline=True)
 def _multivariate_normal(key, mean, cov, shape, dtype, method) -> Array:
-  if not np.ndim(mean) >= 1:
+  if np.ndim(mean) < 1:
     msg = "multivariate_normal requires mean.ndim >= 1, got mean.ndim == {}"
     raise ValueError(msg.format(np.ndim(mean)))
-  if not np.ndim(cov) >= 2:
+  if np.ndim(cov) < 2:
     msg = "multivariate_normal requires cov.ndim >= 2, got cov.ndim == {}"
     raise ValueError(msg.format(np.ndim(cov)))
   n = mean.shape[-1]
@@ -936,7 +935,7 @@ def dirichlet(key: KeyArray,
 
 @partial(jit, static_argnums=(2, 3), inline=True)
 def _dirichlet(key, alpha, shape, dtype) -> Array:
-  if not np.ndim(alpha) >= 1:
+  if np.ndim(alpha) < 1:
     msg = "dirichlet requires alpha.ndim >= 1, got alpha.ndim == {}"
     raise ValueError(msg.format(np.ndim(alpha)))
 
@@ -1352,10 +1351,7 @@ def poisson(key: KeyArray,
         '`poisson` is only implemented for the threefry2x32 RNG, '
         f'not {key_impl}')
   dtype = dtypes.canonicalize_dtype(dtype)
-  if shape is not None:
-    shape = core.canonicalize_shape(shape)
-  else:
-    shape = np.shape(lam)
+  shape = core.canonicalize_shape(shape) if shape is not None else np.shape(lam)
   lam = jnp.broadcast_to(lam, shape)
   lam = lax.convert_element_type(lam, np.float32)
   return _poisson(key, lam, shape, dtype)
@@ -1655,8 +1651,7 @@ def _chisquare(key, df, shape, dtype) -> Array:
   two = _lax_const(df, 2)
   half_df = lax.div(df, two)
   log_g = loggamma(key, a=half_df, shape=shape, dtype=dtype)
-  chi2 = lax.mul(jnp.exp(log_g), two)
-  return chi2
+  return lax.mul(jnp.exp(log_g), two)
 
 
 def f(key: KeyArray,
@@ -1718,8 +1713,7 @@ def _f(key, dfnum, dfden, shape, dtype) -> Array:
   dfnum = jnp.broadcast_to(dfnum, shape)
   num = lax.div(chi2_dfn, dfnum)
   den = lax.div(chi2_dfd ,dfden)
-  f = lax.div(num, den)
-  return f
+  return lax.div(num, den)
 
 
 def rademacher(key: KeyArray,
@@ -2040,8 +2034,7 @@ def _rayleigh(key, scale, shape, dtype) -> Array:
   log_u = lax.log(u)
   n_two = _lax_const(scale, -2)
   sqrt_u = lax.sqrt(lax.mul(log_u, n_two))
-  ray = lax.mul(scale, sqrt_u)
-  return ray
+  return lax.mul(scale, sqrt_u)
 
 def wald(key: KeyArray,
          mean: RealArray,
@@ -2097,8 +2090,7 @@ def _wald(key, mean, shape, dtype) -> Array:
   mean_sq = lax.integer_pow(mean, 2)
   sqrt_term = lax.sqrt(4 * mean * y + mean_sq * y_sq)
   x = mean + mean_sq * y / 2 - mean / 2 * sqrt_term
-  w = lax.select(lax.le(z,  mean / (mean + x)), x, mean_sq / x)
-  return w
+  return lax.select(lax.le(z,  mean / (mean + x)), x, mean_sq / x)
 
 def geometric(key: KeyArray,
               p: RealArray,

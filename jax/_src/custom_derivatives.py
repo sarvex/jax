@@ -77,10 +77,7 @@ def _zeros_like_pytree(x):
 
 @partial(partial, tree_map)
 def _stop_gradient(x):
-  if isinstance(x, core.Tracer):
-    return stop_gradient_p.bind(x)
-  else:
-    return x
+  return stop_gradient_p.bind(x) if isinstance(x, core.Tracer) else x
 
 # like the api_util.py function, but also grabs output avals for error checking
 @lu.transformation_with_aux
@@ -400,9 +397,10 @@ def process_env_traces(primitive, level: int, jvp_was_run: bool, *args):
   outs = yield args, {}
   todo = []
   while True:
-    tracers = [x for x in outs if isinstance(x, core.Tracer)
-               and (level is None or x._trace.level > level)]
-    if tracers:
+    if tracers := [
+        x for x in outs if isinstance(x, core.Tracer) and (
+            level is None or x._trace.level > level)
+    ]:
       ans = max(tracers, key=lambda x: x._trace.level)
     else:
       break
@@ -421,8 +419,7 @@ def _custom_jvp_call_typecheck(_, *in_avals, call_jaxpr, jvp_jaxpr_thunk,
                                num_consts, symbolic_zeros):
   # TODO(mattjj): could do more checking here...
   del in_avals, jvp_jaxpr_thunk, num_consts
-  disallowed_effects = allowed_effects.filter_not_in(call_jaxpr.effects)
-  if disallowed_effects:
+  if disallowed_effects := allowed_effects.filter_not_in(call_jaxpr.effects):
     raise NotImplementedError(
         f'Effects not supported in `custom_jvp`: {disallowed_effects}')
   return call_jaxpr.out_avals, call_jaxpr.effects
@@ -764,12 +761,10 @@ class CustomVJPCallPrimitive(core.CallPrimitive):
                                              out_trees=out_trees,
                                              symbolic_zeros=symbolic_zeros)
     fst, env_trace_todo = lu.merge_linear_aux(env_trace_todo1, env_trace_todo2)
-    if fst:
-      return core.apply_todos(env_trace_todo, map(core.full_lower, outs))
-    else:
+    if not fst:
       env_trace_todo, bwd_transform = env_trace_todo
       bwd = _apply_bwd_transform(bwd_transform, bwd)
-      return core.apply_todos(env_trace_todo, map(core.full_lower, outs))
+    return core.apply_todos(env_trace_todo, map(core.full_lower, outs))
 
   def impl(self, fun, fwd, bwd, *args, out_trees):
     del fwd, bwd, out_trees
@@ -786,9 +781,10 @@ def process_env_traces_fwd(level: int, out_trees, *args):
   todo = []
   bwd_transforms = []
   while True:
-    tracers = [x for x in outs if isinstance(x, core.Tracer)
-               and (level is None or x._trace.level > level)]
-    if tracers:
+    if tracers := [
+        x for x in outs if isinstance(x, core.Tracer) and (
+            level is None or x._trace.level > level)
+    ]:
       ans = max(tracers, key=lambda x: x._trace.level)
     else:
       break
@@ -810,8 +806,7 @@ def _custom_vjp_call_jaxpr_impl(*args, fun_jaxpr, **_):
   return core.jaxpr_as_fun(fun_jaxpr)(*args)
 
 def _custom_vjp_call_jaxpr_abstract_eval(*_, fun_jaxpr, **__):
-  disallowed_effects = allowed_effects.filter_not_in(fun_jaxpr.effects)
-  if disallowed_effects:
+  if disallowed_effects := allowed_effects.filter_not_in(fun_jaxpr.effects):
     raise NotImplementedError(
         f'Effects not supported in `custom_vjp`: {disallowed_effects}')
   return fun_jaxpr.out_avals, fun_jaxpr.effects
@@ -1084,8 +1079,8 @@ def _maybe_perturbed(x: Any) -> bool:
     # If x is a DynamicJaxprTracer then we're staging out; differentiation could
     # happen later, but some types always have trivial tangents.
     vspace = x.aval.at_least_vspace()
-    return not (vspace is core.abstract_token or
-                getattr(vspace, 'dtype', None) == dtypes.float0)
+    return (vspace is not core.abstract_token
+            and getattr(vspace, 'dtype', None) != dtypes.float0)
   elif not isinstance(x, ad.JVPTracer):
     # If x is not a JVPTracer, recursively check its contents.
     return any(_maybe_perturbed(attr) for name, attr in x._contents())

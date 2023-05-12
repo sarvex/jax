@@ -134,9 +134,9 @@ def with_jax_dtype_defaults(func, use_defaults=True):
     result = func(*args, **kwargs)
     if isinstance(use_defaults, bool):
       return tree_map(to_default_dtype, result) if use_defaults else result
-    else:
-      f = lambda arr, use_default: to_default_dtype(arr) if use_default else arr
-      return tree_map(f, result, use_defaults)
+    f = lambda arr, use_default: to_default_dtype(arr) if use_default else arr
+    return tree_map(f, result, use_defaults)
+
   return wrapped
 
 def is_sequence(x):
@@ -297,12 +297,11 @@ def is_device_tpu_v4():
 def _get_device_tags():
   """returns a set of tags defined for the device under test"""
   if is_device_rocm():
-    device_tags = {device_under_test(), "rocm"}
+    return {device_under_test(), "rocm"}
   elif is_device_cuda():
-    device_tags = {device_under_test(), "cuda"}
+    return {device_under_test(), "cuda"}
   else:
-    device_tags = {device_under_test()}
-  return device_tags
+    return {device_under_test()}
 
 def skip_on_devices(*disabled_devices):
   """A decorator for test methods to skip the test on certain devices."""
@@ -379,7 +378,7 @@ def pytest_mark_if_available(marker: str):
 def format_test_name_suffix(opname, shapes, dtypes):
   arg_descriptions = (format_shape_dtype_string(shape, dtype)
                       for shape, dtype in zip(shapes, dtypes))
-  return '{}_{}'.format(opname.capitalize(), '_'.join(arg_descriptions))
+  return f"{opname.capitalize()}_{'_'.join(arg_descriptions)}"
 
 
 # We use special symbols, represented as singleton objects, to distinguish
@@ -446,7 +445,7 @@ def _format_shape_dtype_string(shape, dtype):
   if shape is NUMPY_SCALAR_SHAPE:
     return dtype_str(dtype)
   elif shape is PYTHON_SCALAR_SHAPE:
-    return 'py' + dtype_str(dtype)
+    return f'py{dtype_str(dtype)}'
   elif type(shape) is tuple:
     shapestr = ','.join(str(dim) for dim in shape)
     return f'{dtype_str(dtype)}[{shapestr}]'
@@ -476,10 +475,8 @@ def _rand_dtype(rand, shape, dtype, scale=1., post=lambda x: x):
     r = lambda: np.asarray(scale * abs(rand(*_dims_of_shape(shape))), dtype)
   else:
     r = lambda: np.asarray(scale * rand(*_dims_of_shape(shape)), dtype)
-  if _dtypes.issubdtype(dtype, np.complexfloating):
-    vals = r() + 1.0j * r()
-  else:
-    vals = r()
+  vals = (r() +
+          1.0j * r() if _dtypes.issubdtype(dtype, np.complexfloating) else r())
   return _cast_to_shape(np.asarray(post(vals), dtype), shape, dtype)
 
 
@@ -766,7 +763,7 @@ def sample_product_testcases(*args, **kw):
   for i in _choice(n, min(n, FLAGS.jax_num_generated_cases)):
     testcase = {}
     for a in args:
-      testcase.update(a[i % len(a)])
+      testcase |= a[i % len(a)]
       i //= len(a)
     for k, v in kw:
       testcase[k] = v[i % len(v)]
@@ -1100,8 +1097,7 @@ def create_global_mesh(mesh_shape, axis_names):
     raise unittest.SkipTest(f"Test requires {size} global devices.")
   devices = sorted(jax.devices(), key=lambda d: d.id)
   mesh_devices = np.array(devices[:size]).reshape(mesh_shape)
-  global_mesh = jax.sharding.Mesh(mesh_devices, axis_names)
-  return global_mesh
+  return jax.sharding.Mesh(mesh_devices, axis_names)
 
 
 class _cached_property:

@@ -44,7 +44,7 @@ class PartitionSpec(tuple):
     return tuple.__new__(PartitionSpec, partitions)
 
   def __repr__(self):
-    return "PartitionSpec%s" % tuple.__repr__(self)
+    return f"PartitionSpec{tuple.__repr__(self)}"
 
   def __reduce__(self):
     return (PartitionSpec, tuple(self))

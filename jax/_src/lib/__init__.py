@@ -50,7 +50,7 @@ def check_jaxlib_version(jax_version: str, jaxlib_version: str,
     m = version_regex.match(v)
     if m is None:
       raise ValueError(f"Unable to parse jaxlib version '{v}'")
-    return tuple(int(x) for x in m.group(0).split('.'))
+    return tuple(int(x) for x in m[0].split('.'))
 
   _jax_version = _parse_version(jax_version)
   _minimum_jaxlib_version = _parse_version(minimum_jaxlib_version)
@@ -133,9 +133,7 @@ def _cuda_path() -> Optional[str]:
   # Failing that, we use the copy of libdevice.10.bc we include with jaxlib and
   # hope that the user has ptxas in their PATH.
   path = _jaxlib_path / "cuda"
-  if path.is_dir():
-    return str(path)
-  return None
+  return str(path) if path.is_dir() else None
 
 cuda_path = _cuda_path()
 

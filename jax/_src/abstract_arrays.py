@@ -41,11 +41,20 @@ def zeros_like_array(x):
   return ad_util.zeros_like_aval(aval)
 
 numpy_scalar_types: Set[type] = {  # pylint: disable=g-bare-generic
-    np.int8, np.int16, np.int32, np.int64,
-    np.uint8, np.uint16, np.uint32, np.uint64,
-    np.complex64, np.complex128,
-    np.bool_, np.longlong, np.intc,
-} | set(np.dtype(dt).type for dt in dtypes._float_types)
+    np.int8,
+    np.int16,
+    np.int32,
+    np.int64,
+    np.uint8,
+    np.uint16,
+    np.uint32,
+    np.uint64,
+    np.complex64,
+    np.complex128,
+    np.bool_,
+    np.longlong,
+    np.intc,
+} | {np.dtype(dt).type for dt in dtypes._float_types}
 
 array_types: Set[type] = {np.ndarray} | numpy_scalar_types  # pylint: disable=g-bare-generic
 

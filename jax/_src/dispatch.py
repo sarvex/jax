@@ -112,7 +112,7 @@ class OrigShardings:
   shardings: Sequence[Optional[GSPMDSharding]]
 
   def __hash__(self):
-    return hash(tuple(s for s in self.shardings))
+    return hash(tuple(self.shardings))
 
   def __eq__(self, other):
     if not isinstance(other, OrigShardings):
@@ -213,10 +213,8 @@ def wait_for_tokens():
 def xla_primitive_callable(prim, in_avals, orig_in_shardings, **params):
   def prim_fun(*args):
     out = prim.bind(*args, **params)
-    if prim.multiple_results:
-      return out
-    else:
-      return out,
+    return out if prim.multiple_results else (out, )
+
   donated_invars = (False,) * len(in_avals)
   compiled = _xla_callable_uncached(
       lu.wrap_init(prim_fun), prim.name, donated_invars, False, in_avals,
@@ -276,10 +274,7 @@ def should_tuple_args(num_args: int, platform: str):
   # CPU and GPU do not need tuples as they use host-side data structures that
   # do not have small bounds.
   # TPU only needs a tuple for very long lists
-  if platform == "tpu":
-    return num_args > 2000
-  else:
-    return False
+  return num_args > 2000 if platform == "tpu" else False
 
 
 def raise_warnings_or_errors_for_jit_of_pmap(nreps, backend, name, jaxpr):
@@ -309,10 +304,9 @@ def jaxpr_has_primitive(jaxpr, prim_name: str):
   for eqn in jaxpr.eqns:
     if prim_name in eqn.primitive.name:
       return True
-  for subjaxpr in core.subjaxprs(jaxpr):
-    if jaxpr_has_primitive(subjaxpr, prim_name):
-      return True
-  return False
+  return any(
+      jaxpr_has_primitive(subjaxpr, prim_name)
+      for subjaxpr in core.subjaxprs(jaxpr))
 
 
 class SourceInfo(NamedTuple):
@@ -378,10 +372,7 @@ def _prune_unused_inputs(
 # remove it once we bring the id_tap implementation into the core.
 outfeed_rewriter: Optional[Callable[[core.Jaxpr], core.Jaxpr]] = None
 def apply_outfeed_rewriter(jaxpr: core.Jaxpr) -> core.Jaxpr:
-  if outfeed_rewriter is not None:
-    return outfeed_rewriter(jaxpr)
-  else:
-    return jaxpr
+  return outfeed_rewriter(jaxpr) if outfeed_rewriter is not None else jaxpr
 
 
 # TODO(mattjj,necula): this duplicates code in core.valid_jaxtype, but one
@@ -413,8 +404,7 @@ def jaxpr_replicas(jaxpr) -> int:
 # TODO(mattjj): this function assumes that only pmap has a parameter named
 # axis_size, and that it corresponds to cross-replica mapping
 def eqn_replicas(eqn):
-  call_jaxpr = eqn.params.get("call_jaxpr")
-  if call_jaxpr:
+  if call_jaxpr := eqn.params.get("call_jaxpr"):
     return eqn.params.get('axis_size', 1) * jaxpr_replicas(call_jaxpr)
   elif eqn.primitive in xla.initial_style_primitives:
     return initial_style_primitive_replicas(eqn.params)
@@ -539,8 +529,7 @@ def _cache_write(cache_key: str,
         "callbacks (e.g. from jax.debug.print or breakpoint)")
     return
 
-  min_compile_time = config.jax_persistent_cache_min_compile_time_secs
-  if min_compile_time:
+  if min_compile_time := config.jax_persistent_cache_min_compile_time_secs:
     if compile_time_secs < min_compile_time:
       logger.info(
           "Not writing persistent cache entry for '%s' because it took < %.2f "
@@ -601,10 +590,7 @@ def _device_put_impl(
           "device_put's second argument must be a Device or a Sharding which "
           f"represents addressable devices, but got {s}")
     _check_sharding(aval, s)
-    if getattr(x, 'sharding', None) == s:
-      return x
-    return _put_x(x, s, aval, True)
-
+    return x if getattr(x, 'sharding', None) == s else _put_x(x, s, aval, True)
   # Only `Device` exists below. `Sharding` instance is handled above.
   if isinstance(x, array.ArrayImpl):
     if not x.is_fully_addressable:

@@ -121,9 +121,8 @@ def all_leaves(iterable: Iterable[Any],
   """
   if is_leaf is None:
     return pytree.all_leaves(iterable)
-  else:
-    lst = list(iterable)
-    return lst == tree_leaves(lst, is_leaf)
+  lst = list(iterable)
+  return lst == tree_leaves(lst, is_leaf)
 
 
 _Children = TypeVar("_Children", bound=Iterable[Any])
@@ -245,19 +244,17 @@ def _replace_nones(sentinel, tree):
   """Replaces ``None`` in ``tree`` with ``sentinel``."""
   if tree is None:
     return sentinel
+  if handler := _registry.get(type(tree)):
+    children, metadata = handler.to_iter(tree)
+    proc_children = [_replace_nones(sentinel, child) for child in children]
+    return handler.from_iter(metadata, proc_children)
+  elif isinstance(tree, tuple) and hasattr(tree, '_fields'):
+    # handle namedtuple as a special case, based on heuristic
+    children = iter(tree)
+    proc_children = [_replace_nones(sentinel, child) for child in children]
+    return type(tree)(*proc_children)
   else:
-    handler = _registry.get(type(tree))
-    if handler:
-      children, metadata = handler.to_iter(tree)
-      proc_children = [_replace_nones(sentinel, child) for child in children]
-      return handler.from_iter(metadata, proc_children)
-    elif isinstance(tree, tuple) and hasattr(tree, '_fields'):
-      # handle namedtuple as a special case, based on heuristic
-      children = iter(tree)
-      proc_children = [_replace_nones(sentinel, child) for child in children]
-      return type(tree)(*proc_children)
-    else:
-      return tree
+    return tree
 
 no_initializer = object()
 
@@ -362,22 +359,16 @@ class Partial(functools.partial):
   >>> call_func(print_zero)  # doctest:+ELLIPSIS
   Traced<ShapedArray(int32[], weak_type=True)>with<DynamicJaxprTrace...>
   """
-  def __new__(klass, func, *args, **kw):
-    # In Python 3.10+, if func is itself a functools.partial instance,
-    # functools.partial.__new__ would merge the arguments of this Partial
-    # instance with the arguments of the func. We box func in a class that does
-    # not (yet) have a `func` attribute to defeat this optimization, since we
-    # care exactly which arguments are considered part of the pytree.
-    if isinstance(func, functools.partial):
-      original_func = func
-      func = _HashableCallableShim(original_func)
-      out = super().__new__(klass, func, *args, **kw)
-      func.func = original_func.func
-      func.args = original_func.args
-      func.keywords = original_func.keywords
-      return out
-    else:
-      return super().__new__(klass, func, *args, **kw)
+  def __new__(cls, func, *args, **kw):
+    if not isinstance(func, functools.partial):
+      return super().__new__(cls, func, *args, **kw)
+    original_func = func
+    func = _HashableCallableShim(original_func)
+    out = super().__new__(cls, func, *args, **kw)
+    func.func = original_func.func
+    func.args = original_func.args
+    func.keywords = original_func.keywords
+    return out
 
 
 register_pytree_node(
@@ -413,8 +404,7 @@ def flatten_one_level(pytree: Any) -> Tuple[List[Any], Hashable]:
     ValueError: If the given pytree is not a built-in or registered container
     via ``register_pytree_node`` or ``register_pytree_with_keys``.
   """
-  handler = _registry.get(type(pytree))
-  if handler:
+  if handler := _registry.get(type(pytree)):
     children, meta = handler.to_iter(pytree)
     return list(children), meta
   elif isinstance(pytree, tuple) and hasattr(pytree, '_fields'):
@@ -742,7 +732,7 @@ def _generate_key_paths_(
     # handle namedtuple as a special case, based on heuristic
     key_children = [(GetAttrKey(s), getattr(tree, s)) for s in tree._fields]
     for k, c in key_children:
-      yield from _generate_key_paths_(tuple((*key_path, k)), c, is_leaf)
+      yield from _generate_key_paths_((*key_path, k), c, is_leaf)
   else:
     yield key_path, tree  # strict leaf type
 
@@ -778,8 +768,7 @@ def tree_map_with_path(f: Callable[..., Any],
 
 def _child_keys(pytree: Any) -> KeyPath:
   assert not treedef_is_strict_leaf(tree_structure(pytree))
-  handler = _registry_with_keypaths.get(type(pytree))
-  if handler:
+  if handler := _registry_with_keypaths.get(type(pytree)):
     return tuple(k for k, _ in handler.flatten_with_keys(pytree)[0])
   elif isinstance(pytree, tuple) and hasattr(pytree, '_fields'):
     # handle namedtuple as a special case, based on heuristic

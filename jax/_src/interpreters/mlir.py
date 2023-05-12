@@ -87,11 +87,9 @@ def shape_tensor(sizes: Sequence[Union[int, ir.RankedTensorType]]
       return ir_constant(np.array([d], np.int32))
     else:
       return hlo.ReshapeOp(int1d, hlo.ConvertOp(aval_to_ir_type(core.ShapedArray((), np.int32)), d))
+
   d, *ds = map(lower_dim, sizes)
-  if not ds:
-    return d
-  else:
-    return hlo.ConcatenateOp([d, *ds], i64_attr(0)).result
+  return d if not ds else hlo.ConcatenateOp([d, *ds], i64_attr(0)).result
 
 
 def delegate_lowering(ctx, lowering_fun, *args, **ctx_override_kwargs):
@@ -105,29 +103,27 @@ def delegate_lowering(ctx, lowering_fun, *args, **ctx_override_kwargs):
 # IR Types
 
 # Non-canonicalized dtype to IR type mapping.
-_dtype_to_ir_type : Dict[np.dtype, Callable[[], ir.Type]] = {
-  np.dtype(dtypes.float0): partial(ir.IntegerType.get_signless, 1),
-  np.dtype(np.bool_): partial(ir.IntegerType.get_signless, 1),
-  np.dtype(np.int8): partial(ir.IntegerType.get_signless, 8),
-  np.dtype(np.int16): partial(ir.IntegerType.get_signless, 16),
-  np.dtype(np.int32): partial(ir.IntegerType.get_signless, 32),
-  np.dtype(np.int64): partial(ir.IntegerType.get_signless, 64),
-  np.dtype(np.uint8): partial(ir.IntegerType.get_unsigned, 8),
-  np.dtype(np.uint16): partial(ir.IntegerType.get_unsigned, 16),
-  np.dtype(np.uint32): partial(ir.IntegerType.get_unsigned, 32),
-  np.dtype(np.uint64): partial(ir.IntegerType.get_unsigned, 64),
-  np.dtype(dtypes.bfloat16): ir.BF16Type.get,
-  np.dtype(np.float16): ir.F16Type.get,
-  np.dtype(np.float32): ir.F32Type.get,
-  np.dtype(np.float64): ir.F64Type.get,
-  np.dtype(np.complex64): lambda: ir.ComplexType.get(ir.F32Type.get()),
-  np.dtype(np.complex128): lambda: ir.ComplexType.get(ir.F64Type.get()),
-}
-
-_dtype_to_ir_type.update({
+_dtype_to_ir_type: Dict[np.dtype, Callable[[], ir.Type]] = {
+    np.dtype(dtypes.float0): partial(ir.IntegerType.get_signless, 1),
+    np.dtype(np.bool_): partial(ir.IntegerType.get_signless, 1),
+    np.dtype(np.int8): partial(ir.IntegerType.get_signless, 8),
+    np.dtype(np.int16): partial(ir.IntegerType.get_signless, 16),
+    np.dtype(np.int32): partial(ir.IntegerType.get_signless, 32),
+    np.dtype(np.int64): partial(ir.IntegerType.get_signless, 64),
+    np.dtype(np.uint8): partial(ir.IntegerType.get_unsigned, 8),
+    np.dtype(np.uint16): partial(ir.IntegerType.get_unsigned, 16),
+    np.dtype(np.uint32): partial(ir.IntegerType.get_unsigned, 32),
+    np.dtype(np.uint64): partial(ir.IntegerType.get_unsigned, 64),
+    np.dtype(dtypes.bfloat16): ir.BF16Type.get,
+    np.dtype(np.float16): ir.F16Type.get,
+    np.dtype(np.float32): ir.F32Type.get,
+    np.dtype(np.float64): ir.F64Type.get,
+    np.dtype(np.complex64): lambda: ir.ComplexType.get(ir.F32Type.get()),
+    np.dtype(np.complex128): lambda: ir.ComplexType.get(ir.F64Type.get()),
+} | {
     np.dtype(dtypes.float8_e4m3fn): ir.Float8E4M3FNType.get,
     np.dtype(dtypes.float8_e5m2): ir.Float8E5M2Type.get,
-})
+}
 
 def dtype_to_ir_type(dtype: Union[np.dtype, np.generic]) -> ir.Type:
   assert isinstance(dtype, (np.dtype, np.generic)), type(dtype)
@@ -210,8 +206,7 @@ def ir_constants(val: Any,
     A representation of the constant as a list of IR values.
   """
   for t in type(val).__mro__:
-    handler = _constant_handlers.get(t)
-    if handler:
+    if handler := _constant_handlers.get(t):
       out = handler(val, canonicalize_types)
       assert all(isinstance(v, ir.Value) for v in out), (type(val), out)
       return out
@@ -504,17 +499,15 @@ def sharded_aval(aval: core.AbstractValue,
 
 def eval_dynamic_shape(ctx: LoweringRuleContext,
                        shape: core.Shape) -> Tuple[Union[int, Value], ...]:
-  # assert not core.is_constant_shape(shape)
   if config.jax_dynamic_shapes:
     return tuple(ctx.axis_size_env.get(d, d) for d in shape)  # type: ignore
-  else:
-    ctx = ctx.replace(
-        primitive="eval_dynamic_shape",
-        avals_in=[core.dim_value_aval()] * len(ctx.module_context.dim_vars))
-    res = lower_fun(
-        partial(core.evaluate_shape, shape, ctx.module_context.dim_vars),
-        multiple_results=True)(ctx, *ctx.dim_var_values)
-    return util.flatten(res)  # type: ignore
+  ctx = ctx.replace(
+      primitive="eval_dynamic_shape",
+      avals_in=[core.dim_value_aval()] * len(ctx.module_context.dim_vars))
+  res = lower_fun(
+      partial(core.evaluate_shape, shape, ctx.module_context.dim_vars),
+      multiple_results=True)(ctx, *ctx.dim_var_values)
+  return util.flatten(res)  # type: ignore
 
 
 class LoweringResult(NamedTuple):
@@ -569,8 +562,7 @@ def lower_jaxpr_to_module(
   if platform in _platforms_with_donation:
     input_output_aliases, donated_args = _set_up_aliases(
         in_avals, out_avals, donated_args)
-  unlowerable_effects = lowerable_effects.filter_not_in(jaxpr.effects)
-  if unlowerable_effects:
+  if unlowerable_effects := lowerable_effects.filter_not_in(jaxpr.effects):
     raise ValueError(f'Cannot lower jaxpr with effects: {jaxpr.effects}')
   if any(donated_args):
     unused_donations = [str(a) for a, d in zip(in_avals, donated_args) if d]
@@ -1009,15 +1001,11 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
   def read(v: core.Atom) -> Sequence[ir.Value]:
     if type(v) is core.Literal:
       return ir_constants(v.val, canonicalize_types=True)
-    else:
-      assert isinstance(v, core.Var)
-      return env[v]
+    assert isinstance(v, core.Var)
+    return env[v]
 
   def aval(v: core.Atom) -> core.AbstractValue:
-    if type(v) is core.Literal:
-      return xla.abstractify(v.val)
-    else:
-      return v.aval
+    return xla.abstractify(v.val) if type(v) is core.Literal else v.aval
 
   def write(v: core.Var, node: Sequence[ir.Value]):
     assert node is not None
@@ -1229,14 +1217,13 @@ def reshape(ctx: LoweringRuleContext, op, aval_out: core.AbstractValue) -> ir.Va
     # TODO(frostig,mattjj,necula): asserts a single physical aval, and a
     # particular reshape rule (reshape to the output physical aval's shape)
     aval_out, = aval_out.dtype._rules.physical_avals(aval_out)  # type: ignore
-  if not core.is_constant_shape(aval_out.shape):  # type: ignore
-    shape = eval_dynamic_shape(ctx, aval_out.shape)  # type: ignore
-    return hlo.DynamicReshapeOp(
-        aval_to_ir_type(aval_out), op,
-        shape_tensor(shape),
-    ).result
-  else:
+  if core.is_constant_shape(aval_out.shape):
     return hlo.ReshapeOp(aval_to_ir_type(aval_out), op).result
+  shape = eval_dynamic_shape(ctx, aval_out.shape)  # type: ignore
+  return hlo.DynamicReshapeOp(
+      aval_to_ir_type(aval_out), op,
+      shape_tensor(shape),
+  ).result
 
 def slice_op(ctx: LoweringRuleContext, x, aval_out, *,
              start_indices, limit_indices, strides) -> ir.Value:
@@ -1296,13 +1283,12 @@ def pad(ctx: LoweringRuleContext, aval_out,
                      dense_int_elements(padding_low),
                      dense_int_elements(padding_high),
                      dense_int_elements(padding_interior)).result
-  else:
-    padding_low = shape_tensor(eval_dynamic_shape(ctx, padding_low))
-    padding_high = shape_tensor(eval_dynamic_shape(ctx, padding_high))
-    padding_interior = shape_tensor(eval_dynamic_shape(ctx, padding_interior))
-    return hlo.DynamicPadOp(
-        aval_to_ir_type(aval_out),
-        x, padding_value, padding_low, padding_high, padding_interior).result
+  padding_low = shape_tensor(eval_dynamic_shape(ctx, padding_low))
+  padding_high = shape_tensor(eval_dynamic_shape(ctx, padding_high))
+  padding_interior = shape_tensor(eval_dynamic_shape(ctx, padding_interior))
+  return hlo.DynamicPadOp(
+      aval_to_ir_type(aval_out),
+      x, padding_value, padding_low, padding_high, padding_interior).result
 
 def full_like_aval(ctx: LoweringRuleContext, value, aval: core.ShapedArray) -> ir.Value:
   """Returns an IR constant shaped full of `value` shaped like `aval`."""
@@ -1341,18 +1327,17 @@ def compare_hlo(x, y, direction: str, comparison_type: Optional[str] = None):
 def _minmax_hlo(op, cmp, x, y):
   """Min/max that compares complex values lexicographically as pairs."""
   tensor_type = ir.RankedTensorType(x.type)
-  if ir.ComplexType.isinstance(tensor_type.element_type):
-    rx = hlo.RealOp(x).result
-    ry = hlo.RealOp(y).result
-    real_eq = compare_hlo(rx, ry, "EQ", "FLOAT")
-    real_cmp = compare_hlo(rx, ry, cmp, "FLOAT")
-    imag_cmp = compare_hlo(
-        hlo.ImagOp(x).result,
-        hlo.ImagOp(y).result, cmp, "FLOAT")
-    which = hlo.SelectOp(real_eq, imag_cmp, real_cmp).result
-    return hlo.SelectOp(which, x, y)
-  else:
+  if not ir.ComplexType.isinstance(tensor_type.element_type):
     return op(x, y)
+  rx = hlo.RealOp(x).result
+  ry = hlo.RealOp(y).result
+  real_eq = compare_hlo(rx, ry, "EQ", "FLOAT")
+  real_cmp = compare_hlo(rx, ry, cmp, "FLOAT")
+  imag_cmp = compare_hlo(
+      hlo.ImagOp(x).result,
+      hlo.ImagOp(y).result, cmp, "FLOAT")
+  which = hlo.SelectOp(real_eq, imag_cmp, real_cmp).result
+  return hlo.SelectOp(which, x, y)
 
 min_hlo = partial(_minmax_hlo, hlo.MinOp, "LT")
 max_hlo = partial(_minmax_hlo, hlo.MaxOp, "GT")
@@ -1573,9 +1558,10 @@ def send_to_host(channel: int, token: hlo.TokenType, operand: Any,
     raise NotImplementedError("64-bit types not supported.")
   send_op.attributes["mhlo.frontend_attributes"] = ir.DictAttr.get(
       dict(
-          _xla_host_transfer_handler_name=ir.StringAttr.get(str(name)),
+          _xla_host_transfer_handler_name=ir.StringAttr.get(name),
           _xla_host_transfer_original_type=ir.StringAttr.get(dtype_str),
-          _xla_host_transfer_rendezvous=ir.StringAttr.get(str(name))))
+          _xla_host_transfer_rendezvous=ir.StringAttr.get(name),
+      ))
   if sharding is not None:
     set_sharding(send_op, sharding)
   return send_op.result
@@ -1593,9 +1579,10 @@ def receive_from_host(channel: int, token: hlo.TokenType,
     raise NotImplementedError("64-bit types not supported.")
   recv_op.attributes["mhlo.frontend_attributes"] = ir.DictAttr.get(
       dict(
-          _xla_host_transfer_handler_name=ir.StringAttr.get(str(name)),
+          _xla_host_transfer_handler_name=ir.StringAttr.get(name),
           _xla_host_transfer_original_type=ir.StringAttr.get(dtype_str),
-          _xla_host_transfer_rendezvous=ir.StringAttr.get(str(name))))
+          _xla_host_transfer_rendezvous=ir.StringAttr.get(name),
+      ))
   if sharding is not None:
     set_sharding(recv_op, sharding)
   # Token should be at the end of the results

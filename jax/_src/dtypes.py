@@ -110,10 +110,7 @@ def _canonicalize_dtype(x64_enabled: bool, allow_opaque_dtype: bool, dtype: Any)
   except TypeError as e:
     raise TypeError(f'dtype {dtype!r} not understood') from e
 
-  if x64_enabled:
-    return dtype_
-  else:
-    return _dtype_to_32bit_dtype.get(dtype_, dtype_)
+  return dtype_ if x64_enabled else _dtype_to_32bit_dtype.get(dtype_, dtype_)
 
 @overload
 def canonicalize_dtype(dtype: Any, allow_opaque_dtype: Literal[False] = False) -> DType: ...
@@ -178,9 +175,9 @@ def _scalar_type_to_dtype(typ: type, value: Any = None) -> DType:
   OverflowError: Python int 9223372036854775808 too large to convert to int32
   """
   dtype = canonicalize_dtype(python_scalar_dtypes[typ])
-  if typ is int and value is not None:
-    if value < np.iinfo(dtype).min or value > np.iinfo(dtype).max:
-      raise OverflowError(f"Python int {value} too large to convert to {dtype}")
+  if (typ is int and value is not None
+      and (value < np.iinfo(dtype).min or value > np.iinfo(dtype).max)):
+    raise OverflowError(f"Python int {value} too large to convert to {dtype}")
   return dtype
 
 
@@ -455,9 +452,10 @@ def _jax_type(dtype: DType, weak_type: bool) -> JAXType:
   if weak_type:
     if dtype == bool:
       return dtype
-    if dtype in [_float8_e4m3fn_dtype, _float8_e5m2_dtype, _bfloat16_dtype]:
-      return float
-    return type(dtype.type(0).item())
+    else:
+      return (float if dtype in [
+          _float8_e4m3fn_dtype, _float8_e5m2_dtype, _bfloat16_dtype
+      ] else type(dtype.type(0).item()))
   return dtype
 
 def _dtype_and_weaktype(value: Any) -> Tuple[DType, bool]:
@@ -671,7 +669,7 @@ def result_type(*args: Any, return_weak_type_flag: bool = False) -> Union[DType,
   Returns:
     dtype or (dtype, weak_type) depending on the value of the ``return_weak_type`` argument.
   """
-  if len(args) == 0:
+  if not args:
     raise ValueError("at least one array or dtype is required")
   dtype, weak_type = _lattice_result_type(*(float_ if arg is None else arg for arg in args))
   if weak_type:

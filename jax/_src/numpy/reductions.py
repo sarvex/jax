@@ -124,12 +124,12 @@ def _reduction(a: ArrayLike, name: str, np_fun: Any, op: ReductionOp, init_val: 
   init_val = _reduction_init_val(a, init_val)
   if where_ is not None:
     a = _where(where_, a, init_val)
-  if pos_dims is not dims:
-    if parallel_reduce is None:
-      raise NotImplementedError(f"Named reductions not implemented for jnp.{name}()")
-    result = parallel_reduce(a, dims)
-  else:
+  if pos_dims is dims:
     result = lax.reduce(a, init_val, op, dims)
+  elif parallel_reduce is None:
+    raise NotImplementedError(f"Named reductions not implemented for jnp.{name}()")
+  else:
+    result = parallel_reduce(a, dims)
   if initial is not None:
     initial_arr = lax.convert_element_type(initial, lax_internal.asarray(a).dtype)
     if initial_arr.shape != ():
@@ -302,10 +302,7 @@ alltrue = all
 sometrue = any
 
 def _axis_size(a: ArrayLike, axis: Union[int, Sequence[int]]):
-  if not isinstance(axis, (tuple, list)):
-    axis_seq: Sequence[int] = (axis,)  # type: ignore[assignment]
-  else:
-    axis_seq = axis
+  axis_seq = (axis, ) if not isinstance(axis, (tuple, list)) else axis
   size = 1
   a_shape = np.shape(a)
   for a in axis_seq:
@@ -463,13 +460,12 @@ def _var_promote_types(a_dtype: DTypeLike, dtype: DTypeLike) -> Tuple[DType, DTy
              "important to you.")
       raise ValueError(msg)
     computation_dtype = dtype
+  elif dtypes.issubdtype(a_dtype, np.inexact):
+    dtype = _complex_elem_type(a_dtype)
+    computation_dtype = a_dtype
   else:
-    if not dtypes.issubdtype(a_dtype, np.inexact):
-      dtype = dtypes.to_inexact_dtype(a_dtype)
-      computation_dtype = dtype
-    else:
-      dtype = _complex_elem_type(a_dtype)
-      computation_dtype = a_dtype
+    dtype = dtypes.to_inexact_dtype(a_dtype)
+    computation_dtype = dtype
   return _upcast_f16(computation_dtype), np.dtype(dtype)
 
 
@@ -588,8 +584,8 @@ def nanmean(a: ArrayLike, axis: Axis = None, dtype: DTypeLike = None, out: None 
   nan_mask = lax_internal.bitwise_not(lax_internal._isnan(a))
   normalizer = sum(nan_mask, axis=axis, dtype=np.int32, keepdims=keepdims, where=where)
   normalizer = lax.convert_element_type(normalizer, dtype)
-  td = lax.div(nansum(a, axis, dtype=dtype, keepdims=keepdims, where=where), normalizer)
-  return td
+  return lax.div(nansum(a, axis, dtype=dtype, keepdims=keepdims, where=where),
+                 normalizer)
 
 
 @_wraps(np.nanvar, skip_params=['out'])

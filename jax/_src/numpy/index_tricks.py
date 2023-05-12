@@ -36,12 +36,8 @@ def _make_1d_grid_from_slice(s: slice, op_name: str) -> Array:
                                 f"slice stop of jnp.{op_name}")
   step = core.concrete_or_error(None, s.step,
                                 f"slice step of jnp.{op_name}") or 1
-  if np.iscomplex(step):
-    newobj = linspace(start, stop, int(abs(step)))
-  else:
-    newobj = arange(start, stop, step)
-
-  return newobj
+  return (linspace(start, stop, int(abs(step)))
+          if np.iscomplex(step) else arange(start, stop, step))
 
 
 class _Mgrid:
@@ -80,9 +76,7 @@ class _Mgrid:
     with jax.numpy_dtype_promotion('standard'):
       output = promote_dtypes(*output)
     output_arr = meshgrid(*output, indexing='ij', sparse=False)
-    if len(output_arr) == 0:
-      return arange(0)
-    return stack(output_arr, 0)
+    return arange(0) if len(output_arr) == 0 else stack(output_arr, 0)
 
 
 mgrid = _Mgrid()

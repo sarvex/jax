@@ -218,13 +218,13 @@ def _approx_top_k_abstract_eval(operand, *, k, reduction_dimension,
   if k <= 0:
     raise ValueError(f'k must be positive, got {k}')
   if len(operand.shape) == 0:
-    raise TypeError('approx_top_k operand must have >= 1 dimension, got {}'.format(
-        operand.shape))
+    raise TypeError(
+        f'approx_top_k operand must have >= 1 dimension, got {operand.shape}')
   dims = list(operand.shape)
   if dims[reduction_dimension] < k:
     raise ValueError(
-        'k must be smaller than the size of reduction_dim {}, got {}'.format(
-            dims[reduction_dimension], k))
+        f'k must be smaller than the size of reduction_dim {dims[reduction_dimension]}, got {k}'
+    )
   if not dtypes.issubdtype(operand.dtype, np.floating):
     raise ValueError('operand must be a floating type')
   reduction_input_size = dims[reduction_dimension]
@@ -237,16 +237,12 @@ def _approx_top_k_abstract_eval(operand, *, k, reduction_dimension,
 
 
 def _comparator_builder(op_type, is_max_k):
-  c = xc.XlaBuilder(
-      'top_k_{}_comparator'.format('gt' if is_max_k else 'lt'))
+  c = xc.XlaBuilder(f"top_k_{'gt' if is_max_k else 'lt'}_comparator")
   p0 = xla.parameter(c, 0, xc.Shape.scalar_shape(op_type))
   p1 = xla.parameter(c, 1, xc.Shape.scalar_shape(op_type))
   xla.parameter(c, 2, xc.Shape.scalar_shape(np.dtype(np.int32)))
   xla.parameter(c, 3, xc.Shape.scalar_shape(np.dtype(np.int32)))
-  if is_max_k:
-    cmp_result = xc.ops.Gt(p0, p1)
-  else:
-    cmp_result = xc.ops.Lt(p0, p1)
+  cmp_result = xc.ops.Gt(p0, p1) if is_max_k else xc.ops.Lt(p0, p1)
   return c.build(cmp_result)
 
 

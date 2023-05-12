@@ -119,8 +119,7 @@ def custom_root(f, initial_guess, solve, tangent_solve, has_aux=False):
 @partial(jax.custom_jvp, nondiff_argnums=(0, 1))
 def _custom_root(const_lengths, jaxprs, *args):
   params, initial_guess = _split_root_args(args, const_lengths)
-  solution = core.jaxpr_as_fun(jaxprs.solve)(*(params.solve + initial_guess))
-  return solution
+  return core.jaxpr_as_fun(jaxprs.solve)(*(params.solve + initial_guess))
 
 
 @_custom_root.defjvp
@@ -305,8 +304,7 @@ def _linear_solve_abstract_eval(*args, const_lengths, jaxprs):
 
 def _custom_linear_solve_impl(*args, const_lengths, jaxprs):
   params, b = _split_linear_solve_args(args, const_lengths)
-  x = core.jaxpr_as_fun(jaxprs.solve)(*(params.solve + b))
-  return x
+  return core.jaxpr_as_fun(jaxprs.solve)(*(params.solve + b))
 
 
 def _tangent_linear_map(func, params, params_dot, *x):
@@ -428,9 +426,8 @@ def _linear_solve_batching_rule(spmd_axis_name, axis_size, axis_name, main_type,
                       orig_b_bat)
     if x_bat_out == x_bat and b_bat_out == b_bat:
       break
-    else:
-      x_bat = x_bat_out
-      b_bat = b_bat_out
+    x_bat = x_bat_out
+    b_bat = b_bat_out
   else:
     assert False, "Fixedpoint not reached"
 

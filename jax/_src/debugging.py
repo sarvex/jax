@@ -186,14 +186,7 @@ def _debug_callback_partial_eval_custom(saveable, unks_in, inst_in, eqn):
     return None, eqn, [], [], res
   if saveable(debug_callback_p, *[v.aval for v in eqn.invars], **eqn.params):
     # The policy is telling us we can save the debug callback.
-    if all(inst_in):
-      # If all of the inputs are instantiated, we also stage out the
-      # debug_callback.
-      return eqn, eqn, [], [], []
-    else:
-      # If any are not instantiated, we don't do any extra staging to avoid
-      # affecting the computation.
-      return eqn, None, [], [], []
+    return (eqn, eqn, [], [], []) if all(inst_in) else (eqn, None, [], [], [])
   # If we can't save the debug callback (thanks to the policy) we listen to
   # the policy and stage out the debug callback.
   return eqn, eqn, [], [], []
@@ -360,7 +353,7 @@ def _inspect_sharding_lowering_rule(ctx: mlir.LoweringRuleContext, value, *,
   sharding_callback_info = ShardingCallbackInfo(_hlo_sharding_callback,
                                                 ctx.module_context)
   if xla_extension_version < 150:
-    key = str(id(sharding_callback_info))
+    key = id(sharding_callback_info)
     sharding_callbacks[key] = sharding_callback_info
     # We need to make sure `sharding_callback_info` is still alive when the SPMD
     # partitioner runs so we keep it alive by attaching it to the executable.
@@ -438,9 +431,7 @@ def _slice_to_chunk_idx(size: int, slc: slice) -> int:
   return slc.start // slice_size
 
 def _raise_to_slice(slc: Union[slice, int]):
-  if isinstance(slc, int):
-    return slice(slc, slc + 1)
-  return slc
+  return slice(slc, slc + 1) if isinstance(slc, int) else slc
 
 Color = Union[Tuple[float, float, float], str]
 ColorMap = Callable[[float], Tuple[float, float, float, float]]
@@ -453,9 +444,7 @@ def _canonicalize_color(color: Color) -> str:
 
 def _get_text_color(color: str) -> str:
   r, g, b = map(lambda x: int(x, 16), (color[1:3], color[3:5], color[5:7]))
-  if (r * 0.299 + g * 0.587 + b * 0.114) > 186:
-    return "#000000"
-  return "#ffffff"
+  return "#000000" if (r * 0.299 + g * 0.587 + b * 0.114) > 186 else "#ffffff"
 
 def make_color_iter(color_map, num_rows, num_cols):
   num_colors = num_rows * num_cols
@@ -463,7 +452,7 @@ def make_color_iter(color_map, num_rows, num_cols):
   idx = 0
   for _ in range(num_colors):
     yield color_map(color_values[idx])
-    idx = (idx + num_colors // 2 + bool(num_colors % 2 == 0)) % num_colors
+    idx = (idx + num_colors // 2 + (num_colors % 2 == 0)) % num_colors
 
 def visualize_sharding(shape: Sequence[int], sharding: Sharding, *,
                        use_color: bool = True, scale: float = 1.,
@@ -523,11 +512,11 @@ def visualize_sharding(shape: Sequence[int], sharding: Sharding, *,
       heights[chunk_idxs] = None
       widths[chunk_idxs]  = horiz_size / shape[0]
     slices.setdefault(chunk_idxs, set()).add(dev.id)
-  num_rows = max([a[0] for a in slices.keys()]) + 1
+  num_rows = max(a[0] for a in slices) + 1
   if len(list(slices.keys())[0]) == 1:
     num_cols = 1
   else:
-    num_cols = max([a[1] for a in slices.keys()]) + 1
+    num_cols = max(a[1] for a in slices) + 1
 
   color_iter = make_color_iter(color_map, num_rows, num_cols)
   table = rich.table.Table(show_header=False, show_lines=not use_color,
@@ -540,10 +529,7 @@ def visualize_sharding(shape: Sequence[int], sharding: Sharding, *,
       entry = f"{device_kind} "+",".join([str(s) for s in sorted(slices[i, j])])
       width, maybe_height = widths[i, j], heights[i, j]
       width = int(width * base_width * height_to_width_ratio)
-      if maybe_height is None:
-        height = 1
-      else:
-        height = int(maybe_height * base_height)
+      height = 1 if maybe_height is None else int(maybe_height * base_height)
       width = min(max(width, min_width), max_width)
       left_padding, remainder = divmod(width - len(entry) - 2, 2)
       right_padding = left_padding + remainder

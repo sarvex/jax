@@ -80,8 +80,7 @@ class Config:
       raise Exception(f"Unrecognized config option: {name}")
     self.values[name] = val
 
-    hook = self._update_hooks.get(name, None)
-    if hook:
+    if hook := self._update_hooks.get(name, None):
       hook(val)
 
   def read(self, name):
@@ -230,7 +229,7 @@ class Config:
     """
     name = name.lower()
     if upgrade:
-      help += ' ' + UPGRADE_BOOL_HELP
+      help += f' {UPGRADE_BOOL_HELP}'
       extra_description += UPGRADE_BOOL_EXTRA_DESC
     self.DEFINE_bool(name, bool_env(name.upper(), default), help,
                      update_hook=update_global_hook)
@@ -239,6 +238,7 @@ class Config:
     def get_state(self):
       val = _thread_local_state.__dict__.get(name, unset)
       return val if val is not unset else self._read(name)
+
     setattr(Config, name, property(get_state))
 
     return _StateContextManager(name, help, update_thread_local_hook,
@@ -460,11 +460,11 @@ class Config:
     tls = jax_jit.thread_local_state()
     axis_env_state = ()
     mesh_context_manager = ()
-    context = tls.extra_jit_context
-    if context and context.axis_env_state is not None:
-      axis_env_state = context.axis_env_state
-    if context and context.mesh_context_manager:
-      mesh_context_manager = context.mesh_context_manager
+    if context := tls.extra_jit_context:
+      if context.axis_env_state is not None:
+        axis_env_state = context.axis_env_state
+      if context.mesh_context_manager:
+        mesh_context_manager = context.mesh_context_manager
     return (axis_env_state, mesh_context_manager, self.x64_enabled,
             self.jax_numpy_rank_promotion, self.jax_default_matmul_precision,
             self.jax_dynamic_shapes, self.jax_numpy_dtype_promotion,

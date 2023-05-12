@@ -73,25 +73,24 @@ def reduce_window(operand, init_value, computation: Callable,
     base_dilation = (1,) * len(window_dimensions)
   if window_dilation is None:
     window_dilation = (1,) * len(window_dimensions)
-  monoid_reducer = _get_monoid_window_reducer(computation, flat_init_values)
-  if monoid_reducer:
+  if monoid_reducer := _get_monoid_window_reducer(computation,
+                                                  flat_init_values):
     return monoid_reducer(operand, window_dimensions, window_strides, padding,
                           base_dilation, window_dilation)
-  else:
-    flat_init_avals = map(lax._abstractify, flat_init_values)
-    jaxpr, consts, out_tree = lax._variadic_reduction_jaxpr(
-        computation, tuple(flat_init_avals), init_value_tree)
-    if operand_tree != out_tree:
-      raise ValueError(
-        'reduce_window output must have the same tree structure as the operands'
-        f' {operand_tree} vs. {out_tree}')
-    out_flat = reduce_window_p.bind(
-        *flat_operands, *flat_init_values, jaxpr=jaxpr, consts=consts,
-        window_dimensions=tuple(window_dimensions),
-        window_strides=tuple(window_strides), padding=padding,
-        base_dilation=tuple(base_dilation),
-        window_dilation=tuple(window_dilation))
-    return tree_util.tree_unflatten(out_tree, out_flat)
+  flat_init_avals = map(lax._abstractify, flat_init_values)
+  jaxpr, consts, out_tree = lax._variadic_reduction_jaxpr(
+      computation, tuple(flat_init_avals), init_value_tree)
+  if operand_tree != out_tree:
+    raise ValueError(
+      'reduce_window output must have the same tree structure as the operands'
+      f' {operand_tree} vs. {out_tree}')
+  out_flat = reduce_window_p.bind(
+      *flat_operands, *flat_init_values, jaxpr=jaxpr, consts=consts,
+      window_dimensions=tuple(window_dimensions),
+      window_strides=tuple(window_strides), padding=padding,
+      base_dilation=tuple(base_dilation),
+      window_dilation=tuple(window_dilation))
+  return tree_util.tree_unflatten(out_tree, out_flat)
 
 def _get_monoid_window_reducer(monoid_op: Callable,
                                xs: Sequence[Array]) -> Optional[Callable]:

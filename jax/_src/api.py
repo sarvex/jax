@@ -517,10 +517,9 @@ def xla_computation(fun: Callable,
   def make_axis_env(nreps):
     if axis_env is None:
       return sharding_impls.AxisEnv(nreps, (), ())
-    else:
-      nreps = nreps * math.prod(size for name, size in axis_env)
-      names, sizes = unzip2(axis_env)
-      return sharding_impls.AxisEnv(nreps, names, sizes)
+    nreps = nreps * math.prod(size for name, size in axis_env)
+    names, sizes = unzip2(axis_env)
+    return sharding_impls.AxisEnv(nreps, names, sizes)
 
   @wraps(fun)
   @api_boundary
@@ -576,10 +575,7 @@ def xla_computation(fun: Callable,
                            "to get a ShapedArray, otherwise this "
                            "information is lost")
 
-    if return_shape:
-      return built, out_shape
-    else:
-      return built
+    return (built, out_shape) if return_shape else built
 
   return computation_maker
 
@@ -727,10 +723,7 @@ def value_and_grad(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
     tree_map(partial(_check_output_dtype_grad, holomorphic), ans)
     g = vjp_py(lax_internal._one(ans))
     g = g[0] if isinstance(argnums, int) else g
-    if not has_aux:
-      return ans, g
-    else:
-      return (ans, aux), g
+    return (ans, g) if not has_aux else ((ans, aux), g)
 
   return value_and_grad_f
 
@@ -741,11 +734,10 @@ def _check_scalar(x):
   except TypeError as e:
     raise TypeError(msg(f"was {x}")) from e
   else:
-    if isinstance(aval, ShapedArray):
-      if aval.shape != ():
-        raise TypeError(msg(f"had shape: {aval.shape}"))
-    else:
+    if not isinstance(aval, ShapedArray):
       raise TypeError(msg(f"had abstract value {aval}"))
+    if aval.shape != ():
+      raise TypeError(msg(f"had shape: {aval.shape}"))
 
 def _check_input_dtype_revderiv(name, holomorphic, allow_int, x):
   dispatch.check_arg(x)
@@ -753,10 +745,9 @@ def _check_input_dtype_revderiv(name, holomorphic, allow_int, x):
   if core.is_opaque_dtype(aval.dtype):
     raise TypeError(
         f"{name} with input element type {aval.dtype.name}")
-  if holomorphic:
-    if not dtypes.issubdtype(aval.dtype, np.complexfloating):
-      raise TypeError(f"{name} with holomorphic=True requires inputs with complex dtype, "
-                      f"but got {aval.dtype.name}.")
+  if holomorphic and not dtypes.issubdtype(aval.dtype, np.complexfloating):
+    raise TypeError(f"{name} with holomorphic=True requires inputs with complex dtype, "
+                    f"but got {aval.dtype.name}.")
   if (dtypes.issubdtype(aval.dtype, np.integer) or
       dtypes.issubdtype(aval.dtype, np.bool_)):
     if not allow_int:
@@ -847,10 +838,7 @@ def jacfwd(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
     tree_map(partial(_check_output_dtype_jacfwd, holomorphic), y)
     example_args = dyn_args[0] if isinstance(argnums, int) else dyn_args
     jac_tree = tree_map(partial(_jacfwd_unravel, example_args), y, jac)
-    if not has_aux:
-      return jac_tree
-    else:
-      return jac_tree, aux
+    return jac_tree if not has_aux else (jac_tree, aux)
 
   return jacfun
 
@@ -873,10 +861,9 @@ def _check_input_dtype_jacfwd(holomorphic: bool, x: Any) -> None:
 
 def _check_output_dtype_jacfwd(holomorphic, x):
   aval = core.get_aval(x)
-  if holomorphic:
-    if not dtypes.issubdtype(aval.dtype, np.complexfloating):
-      raise TypeError("jacfwd with holomorphic=True requires outputs with complex dtype, "
-                      f"but got {aval.dtype.name}.")
+  if holomorphic and not dtypes.issubdtype(aval.dtype, np.complexfloating):
+    raise TypeError("jacfwd with holomorphic=True requires outputs with complex dtype, "
+                    f"but got {aval.dtype.name}.")
 
 def jacrev(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
            has_aux: bool = False, holomorphic: bool = False, allow_int: bool = False) -> Callable:
@@ -936,10 +923,7 @@ def jacrev(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
     example_args = dyn_args[0] if isinstance(argnums, int) else dyn_args
     jac_tree = tree_map(partial(_jacrev_unravel, y), example_args, jac)
     jac_tree = tree_transpose(tree_structure(example_args), tree_structure(y), jac_tree)
-    if not has_aux:
-      return jac_tree
-    else:
-      return jac_tree, aux
+    return jac_tree if not has_aux else (jac_tree, aux)
 
   return jacfun
 jacobian = jacrev
@@ -1705,10 +1689,10 @@ def _shared_code_pmap(fun, axis_name, static_broadcasted_argnums,
   donate_tuple = rebase_donate_argnums(
       _ensure_index_tuple(donate_argnums), static_broadcasted_tuple)
 
-  if not all(type(l) is int for l in tree_leaves(in_axes)):
+  if any(type(l) is not int for l in tree_leaves(in_axes)):
     raise TypeError("pmap in_axes must be an int, None, or (nested) container "
                     f"with those types as leaves, but got {in_axes}.")
-  if not all(type(l) is int for l in tree_leaves(out_axes)):
+  if any(type(l) is not int for l in tree_leaves(out_axes)):
     raise TypeError("pmap out_axes must be an int, None, or (nested) container "
                     f"with those types as leaves, but got {out_axes}.")
 
@@ -2378,11 +2362,10 @@ def make_jaxpr(fun: Callable,
     flat_args, in_tree = tree_flatten((args, kwargs))
     if abstracted_axes is None:
       return map(shaped_abstractify, flat_args), in_tree, [True] * len(flat_args)
-    else:
-      axes_specs = _flat_axes_specs(abstracted_axes, *args, **kwargs)
-      in_type = pe.infer_lambda_input_type(axes_specs, flat_args)
-      in_avals, keep_inputs = unzip2(in_type)
-      return in_avals, in_tree, keep_inputs
+    axes_specs = _flat_axes_specs(abstracted_axes, *args, **kwargs)
+    in_type = pe.infer_lambda_input_type(axes_specs, flat_args)
+    in_avals, keep_inputs = unzip2(in_type)
+    return in_avals, in_tree, keep_inputs
 
   @wraps(fun)
   @api_boundary
@@ -2519,7 +2502,7 @@ def device_put_sharded(shards: Sequence[Any], devices: Sequence[xc.Device]):  # 
 
   def _device_put_sharded(*xs):
     avals = [core.raise_to_shaped(core.get_aval(x)) for x in xs]
-    if not all(a1 == a2 for a1, a2 in zip(avals[:-1], avals[1:])):
+    if any(a1 != a2 for a1, a2 in zip(avals[:-1], avals[1:])):
       a1, a2 = next((a1, a2) for a1, a2 in zip(avals[:-1], avals[1:])
                     if a1 != a2)
       raise ValueError("the shards passed to device_put_sharded must have "
@@ -2530,6 +2513,7 @@ def device_put_sharded(shards: Sequence[Any], devices: Sequence[xc.Device]):  # 
     if core.is_opaque_dtype(stacked_aval.dtype):
       return stacked_aval.dtype._rules.device_put_sharded(xs, stacked_aval, sharding, devices)
     return pxla.batched_device_put(stacked_aval, sharding, xs, list(devices))
+
 
 
   with config_explicit_device_put_scope():
@@ -2682,11 +2666,10 @@ class ShapeDtypeStruct:
   def __eq__(self, other):
     if not isinstance(other, ShapeDtypeStruct):
       return False
-    else:
-      other_sh = other.sharding if hasattr(other, "sharding") else None
-      sh = self.sharding if hasattr(self, "sharding") else None
-      return ((other.shape, other.dtype, other.named_shape, other_sh) ==
-              (self.shape, self.dtype, self.named_shape, sh))
+    other_sh = other.sharding if hasattr(other, "sharding") else None
+    sh = self.sharding if hasattr(self, "sharding") else None
+    return ((other.shape, other.dtype, other.named_shape, other_sh) ==
+            (self.shape, self.dtype, self.named_shape, sh))
 
   def __hash__(self):
     # TODO(frostig): avoid the conversion from dict by addressing

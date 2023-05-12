@@ -74,15 +74,16 @@ class WebDebugger(cli_debugger.CliDebugger):
 
   def get_globals(self):
     current_frame = self.current_frame()
-    globals = "\n".join([f"{key} = {value}" for key, value in
-      sorted(current_frame.globals.items())])
-    return globals
+    return "\n".join([
+        f"{key} = {value}"
+        for key, value in sorted(current_frame.globals.items())
+    ])
 
   def get_locals(self):
     current_frame = self.current_frame()
-    locals = "\n".join([f"{key} = {value}" for key, value in
-      sorted(current_frame.locals.items())])
-    return locals
+    return "\n".join([
+        f"{key} = {value}" for key, value in sorted(current_frame.locals.items())
+    ])
 
   def run(self):
     return self.cmdloop()

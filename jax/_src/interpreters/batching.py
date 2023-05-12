@@ -174,8 +174,7 @@ FromEltHandler = Callable[[Callable, AxisSize, Elt, MapSpec], Vmappable]
 MakeIotaHandler = Callable[[AxisSize], Array]
 
 def to_elt(trace: Trace, get_idx: GetIdx, x: Vmappable, spec: MapSpec) -> Elt:
-  handler = to_elt_handlers.get(type(x))
-  if handler:
+  if handler := to_elt_handlers.get(type(x)):
     return handler(partial(to_elt, trace, get_idx), get_idx, x, spec)
   elif type(x) is Pile:
     if spec is not pile_axis:
@@ -193,23 +192,20 @@ to_elt_handlers: Dict[Type, ToEltHandler] = {}
 
 def from_elt(trace: 'BatchTrace', axis_size: AxisSize, x: Elt, spec: MapSpec
              ) -> Vmappable:
-  handler = from_elt_handlers.get(type(x))
-  if handler:
+  if handler := from_elt_handlers.get(type(x)):
     return handler(partial(from_elt, trace), axis_size, x, spec)
   x_ = trace.full_raise(x)
   val, bdim = x_.val, x_.batch_dim
-  if type(bdim) is ConcatAxis:
-    if spec is not pile_axis:
-      # TODO(mattjj): improve this error message
-      raise TypeError("ragged output without using pile_axis out_axes spec")
-    return _pile_result(axis_size, bdim.axis, bdim.segment_lengths, val)
-  else:
+  if type(bdim) is not ConcatAxis:
     return matchaxis(trace.axis_name, axis_size, x_.batch_dim, spec, x_.val)
+  if spec is not pile_axis:
+    # TODO(mattjj): improve this error message
+    raise TypeError("ragged output without using pile_axis out_axes spec")
+  return _pile_result(axis_size, bdim.axis, bdim.segment_lengths, val)
 from_elt_handlers: Dict[Type, FromEltHandler] = {}
 
 def make_iota(axis_size: AxisSize) -> Array:
-  handler = make_iota_handlers.get(type(axis_size))
-  if handler:
+  if handler := make_iota_handlers.get(type(axis_size)):
     return handler(axis_size)
   else:
     return jax.lax.iota('int32', int(axis_size))
@@ -280,10 +276,7 @@ class BatchTracer(Tracer):
                                weak_type=aval.weak_type)
 
   def full_lower(self):
-    if self.batch_dim is not_mapped:
-      return core.full_lower(self.val)
-    else:
-      return self
+    return core.full_lower(self.val) if self.batch_dim is not_mapped else self
 
   def _origin_msg(self):
     if self.source_info is None:
@@ -398,42 +391,43 @@ class BatchTrace(Trace):
     vals, dims = unzip2((t.val, t.batch_dim) for t in tracers)
     if all(dim is not_mapped for dim in dims):
       return map_primitive.bind(f, *vals, **params)
-    else:
-      assert len({x.shape[d] for x, d in zip(vals, dims) if d is not not_mapped}) == 1
-      # The logic for the dimension math below is as follows:
-      # ╔═════════════╦════════════════════════════════════════╦═══════════╗
-      # ║ d / in_axis ║ None                                   ║ int       ║
-      # ╠═════════════╬════════════════════════════════════════╩═══════════╣
-      # ║ None        ║ No extra axis, so in_axis unaffected               ║
-      # ╠═════════════╬════════════════════════════════════════╦═══════════╣
-      # ║ int         ║ Not mapped, so batching dim unaffected ║ See below ║
-      # ╚═════════════╩════════════════════════════════════════╩═══════════╝
-      # When both d and in_axis are defined then:
-      # - If `d <= in_axis`, we have to move the `in_axis` one dimension further;
-      # - If `d >  in_axis`, we have to decrement `d` (as `in_axis` will get removed).
-      def both_mapped(in_out_axis, d):
-        return in_out_axis is not None and d is not not_mapped
-      new_in_axes = tuple(
-        in_axis + 1 if both_mapped(in_axis, d) and d <= in_axis else in_axis
-        for d, in_axis in zip(dims, params['in_axes']))
-      new_dims = tuple(
-        d - 1 if both_mapped(in_axis, d) and in_axis < d else d
-        for d, in_axis in zip(dims, params['in_axes']))
-      f, dims_out = batch_subtrace(f, self.main, new_dims)
-      out_axes_thunk = params['out_axes_thunk']
-      # NOTE: This assumes that the choice of the dimensions over which outputs
-      #       are batched is entirely dependent on the function and not e.g. on the
-      #       data or its shapes.
-      @as_hashable_function(closure=out_axes_thunk)
-      def new_out_axes_thunk():
-        return tuple(out_axis + 1 if both_mapped(out_axis, d) and d < out_axis else out_axis
-                     for out_axis, d in zip(out_axes_thunk(), dims_out()))
-      new_params = dict(params, in_axes=new_in_axes, out_axes_thunk=new_out_axes_thunk)
-      vals_out = map_primitive.bind(f, *vals, **new_params)
-      dims_out_ = [d + 1 if both_mapped(out_axis, d) and out_axis <= d else d
-                   for d, out_axis in zip(dims_out(), out_axes_thunk())]
-      src = source_info_util.current()
-      return [BatchTracer(self, v, d, src) for v, d in zip(vals_out, dims_out_)]
+    assert len({x.shape[d] for x, d in zip(vals, dims) if d is not not_mapped}) == 1
+    # The logic for the dimension math below is as follows:
+    # ╔═════════════╦════════════════════════════════════════╦═══════════╗
+    # ║ d / in_axis ║ None                                   ║ int       ║
+    # ╠═════════════╬════════════════════════════════════════╩═══════════╣
+    # ║ None        ║ No extra axis, so in_axis unaffected               ║
+    # ╠═════════════╬════════════════════════════════════════╦═══════════╣
+    # ║ int         ║ Not mapped, so batching dim unaffected ║ See below ║
+    # ╚═════════════╩════════════════════════════════════════╩═══════════╝
+    # When both d and in_axis are defined then:
+    # - If `d <= in_axis`, we have to move the `in_axis` one dimension further;
+    # - If `d >  in_axis`, we have to decrement `d` (as `in_axis` will get removed).
+    def both_mapped(in_out_axis, d):
+      return in_out_axis is not None and d is not not_mapped
+
+    new_in_axes = tuple(
+      in_axis + 1 if both_mapped(in_axis, d) and d <= in_axis else in_axis
+      for d, in_axis in zip(dims, params['in_axes']))
+    new_dims = tuple(
+      d - 1 if both_mapped(in_axis, d) and in_axis < d else d
+      for d, in_axis in zip(dims, params['in_axes']))
+    f, dims_out = batch_subtrace(f, self.main, new_dims)
+    out_axes_thunk = params['out_axes_thunk']
+    # NOTE: This assumes that the choice of the dimensions over which outputs
+    #       are batched is entirely dependent on the function and not e.g. on the
+    #       data or its shapes.
+    @as_hashable_function(closure=out_axes_thunk)
+    def new_out_axes_thunk():
+      return tuple(out_axis + 1 if both_mapped(out_axis, d) and d < out_axis else out_axis
+                   for out_axis, d in zip(out_axes_thunk(), dims_out()))
+
+    new_params = dict(params, in_axes=new_in_axes, out_axes_thunk=new_out_axes_thunk)
+    vals_out = map_primitive.bind(f, *vals, **new_params)
+    dims_out_ = [d + 1 if both_mapped(out_axis, d) and out_axis <= d else d
+                 for d, out_axis in zip(dims_out(), out_axes_thunk())]
+    src = source_info_util.current()
+    return [BatchTracer(self, v, d, src) for v, d in zip(vals_out, dims_out_)]
 
   def post_process_map(self, call_primitive, out_tracers, params):
     vals, dims, srcs = unzip3((t.val, t.batch_dim, t.source_info)
@@ -565,8 +559,7 @@ def _batch_inner(axis_size, out_dim_dests, main, in_dims, *in_vals):
   in_tracers = map(partial(to_elt, trace, idx), in_vals, in_dims)
   outs = yield in_tracers, {}
   out_dim_dests = out_dim_dests() if callable(out_dim_dests) else out_dim_dests
-  out_vals = map(partial(from_elt, trace, axis_size), outs, out_dim_dests)
-  yield out_vals
+  yield map(partial(from_elt, trace, axis_size), outs, out_dim_dests)
 
 # NOTE: This divides the in_axes by the tile_size and multiplies the out_axes by it.
 def vtile(f_flat: lu.WrappedFun,
@@ -617,7 +610,7 @@ def batch_subtrace(main, in_dims, *in_vals):
   yield (*segment_lens, *out_vals), out_dims
 
 def unpack_concat_axes(dims):
-  if not any(type(d) is ConcatAxis for d in dims):
+  if all(type(d) is not ConcatAxis for d in dims):
     return [], dims
   concat_axis_map = collections.OrderedDict()
   def convert(d: ConcatAxis) -> ConcatAxis:
@@ -625,6 +618,7 @@ def unpack_concat_axes(dims):
         id(core.get_referent(d.segment_lengths)),
         (d.segment_lengths, pe.DBIdx(len(concat_axis_map))))
     return ConcatAxis(d.axis, dbidx)
+
   new_dims = [convert(d) if isinstance(d, ConcatAxis) else d for d in dims]
   segment_lens = [s for s, _ in concat_axis_map.values()]
   return segment_lens, new_dims
@@ -747,14 +741,10 @@ def _batch_jaxpr_outer(axis_name, spmd_axis_name, axis_size, in_dims, main_type,
   yield out_vals
 
 def _merge_bdims(x, y):
-  if x == y:
-    return x
-  elif x is not_mapped:
-    return y
-  elif y is not_mapped:
+  if x == y or x is not not_mapped and y is not_mapped or x is not not_mapped:
     return x
   else:
-    return x  # arbitrary
+    return y
 
 class ZeroIfMapped: pass
 zero_if_mapped = ZeroIfMapped()
@@ -810,22 +800,19 @@ def _match_axes_and_sum(axis_size, axis_name, out_dims_thunk, out_dim_dests, *in
                     sum_match=True), out_dims_thunk(), out_dim_dests, out_vals)
 
 def _matchaxis_symbolic_zeros(axis_name, sz, name, src, dst, x, sum_match=False):
-  # Just like `matchaxis`, but handles symbolic zeros using ad_util.py
-  # TODO(mattjj): dedup with matchaxis
-  if isinstance(x, (Zero, SymbolicZero)):
-    if src == dst:
-      return x
-    elif type(src) == type(dst) == int:
-      aval = core.mapped_aval(sz, src, x.aval)
-      return Zero(core.unmapped_aval(sz, name, dst, aval))
-    elif src is not_mapped and dst is not not_mapped:
-      return Zero(core.unmapped_aval(sz, name, dst, x.aval))
-    elif dst is not_mapped and sum_match:
-      return Zero(core.mapped_aval(sz, src, x.aval))
-    else:
-      raise ValueError((axis_name, x, src, dst))
-  else:
+  if not isinstance(x, (Zero, SymbolicZero)):
     return matchaxis(axis_name, sz, src, dst, x, sum_match=sum_match)
+  if src == dst:
+    return x
+  elif type(src) == type(dst) == int:
+    aval = core.mapped_aval(sz, src, x.aval)
+    return Zero(core.unmapped_aval(sz, name, dst, aval))
+  elif src is not_mapped and dst is not not_mapped:
+    return Zero(core.unmapped_aval(sz, name, dst, x.aval))
+  elif dst is not_mapped and sum_match:
+    return Zero(core.mapped_aval(sz, src, x.aval))
+  else:
+    raise ValueError((axis_name, x, src, dst))
 
 
 ### utilities for defining primitives' batching rules
@@ -888,7 +875,7 @@ def reducer_batcher(prim, batched_args, batch_dims, axes, **params):
   bdim, = batch_dims
   if isinstance(bdim, int):
     axes = tuple(np.where(np.less(axes, bdim), axes, np.add(axes, 1)))
-    bdim_out = int(list(np.delete(np.arange(operand.ndim), axes)).index(bdim))
+    bdim_out = list(np.delete(np.arange(operand.ndim), axes)).index(bdim)
     if 'input_shape' in params:
       params = dict(params, input_shape=operand.shape)
     return prim.bind(operand, axes=axes, **params), bdim_out
@@ -911,9 +898,8 @@ def segment_sum(operand, segment_lens):
   scat_idx = jax.numpy.cumsum(segment_lens) - segment_lens
   segment_ids = jax.numpy.cumsum(
       jax.numpy.zeros(operand.shape[0], 'int32').at[scat_idx].set(1)) - 1
-  out = jax.numpy.zeros((len(segment_lens), *operand.shape[1:]),
-                        operand.dtype).at[segment_ids].add(operand)
-  return out
+  return (jax.numpy.zeros((len(segment_lens), *operand.shape[1:]),
+                          operand.dtype).at[segment_ids].add(operand))
 
 ### general utilities for manipulating axes on jaxpr types (not vmappables)
 
@@ -951,10 +937,7 @@ def matchaxis(axis_name, sz, src, dst, x, sum_match=False):
       raise ValueError(f'vmap has mapped output but out_axes is {dst}')
 
 def bdim_at_front(x, bdim, size):
-  if bdim is not_mapped:
-    return broadcast(x, size, 0)
-  else:
-    return moveaxis(x, bdim, 0)
+  return broadcast(x, size, 0) if bdim is not_mapped else moveaxis(x, bdim, 0)
 
 # sets up primitive batchers for ad_util and xla primitives
 

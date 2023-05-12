@@ -42,11 +42,8 @@ def _can_use_color() -> bool:
     # Check if we're in IPython or Colab
     ipython = get_ipython()  # type: ignore[name-defined]
     shell = ipython.__class__.__name__
-    if shell == "ZMQInteractiveShell":
+    if shell == "ZMQInteractiveShell" or "colab" in str(ipython.__class__):
       # Jupyter Notebook
-      return True
-    elif "colab" in str(ipython.__class__):
-      # Google Colab (external or internal)
       return True
   except NameError:
     pass
@@ -166,7 +163,7 @@ _BreakMode = enum.Enum("_BreakMode", ["FLAT", "BREAK"])
 
 def _fits(doc: Doc, width: int, agenda: List[Tuple[int, _BreakMode, Doc]]
          ) -> bool:
-  while width >= 0 and len(agenda) > 0:
+  while width >= 0 and agenda:
     i, m, doc = agenda.pop()
     if isinstance(doc, _NilDoc):
       pass
@@ -196,7 +193,7 @@ def _sparse(doc: Doc) -> bool:
   agenda = [doc]
   num_annotations = 0
   seen_break = False
-  while len(agenda) > 0:
+  while agenda:
     doc = agenda.pop()
     if isinstance(doc, _NilDoc):
       pass
@@ -266,8 +263,9 @@ def _align_annotations(lines):
     else:
       out.append(l._replace(text=l.text + " " * (maxlen - l.width),
                             annotations=l.annotations[0]))
-      for a in l.annotations[1:]:
-        out.append(_Line(text=" " * maxlen, width=l.width, annotations=a))
+      out.extend(
+          _Line(text=" " * maxlen, width=l.width, annotations=a)
+          for a in l.annotations[1:])
   return out
 
 
@@ -281,7 +279,7 @@ def _format(doc: Doc, width: int, *, use_color, annotation_prefix) -> str:
   k = 0
   line_text = ""
   line_annotations = []
-  while len(agenda) > 0:
+  while agenda:
     i, m, doc, color = agenda.pop()
     if isinstance(doc, _NilDoc):
       pass
@@ -357,9 +355,7 @@ def text(s: str, annotation: Optional[str] = None) -> Doc:
 def concat(docs: Sequence[Doc]) -> Doc:
   """Concatenation of documents."""
   docs = list(docs)
-  if len(docs) == 1:
-    return docs[0]
-  return _ConcatDoc(docs)
+  return docs[0] if len(docs) == 1 else _ConcatDoc(docs)
 
 def brk(text: str = " ") -> Doc:
   """A break.
@@ -403,10 +399,9 @@ keyword = partial(color, intensity=Intensity.BRIGHT, foreground=Color.BLUE)
 def join(sep: Doc, docs: Sequence[Doc]) -> Doc:
   """Concatenates `docs`, separated by `sep`."""
   docs = list(docs)
-  if len(docs) == 0:
+  if not docs:
     return nil()
   xs = [docs[0]]
   for doc in docs[1:]:
-    xs.append(sep)
-    xs.append(doc)
+    xs.extend((sep, doc))
   return concat(xs)

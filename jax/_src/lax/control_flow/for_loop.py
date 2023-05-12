@@ -194,7 +194,7 @@ def scan(f: Callable[[Carry, X], Tuple[Carry, Y]],
 
   if length is not None:
     length = int(length)
-    if not all(length == l for l in lengths):
+    if any(length != l for l in lengths):
       msg = ("scan got `length` argument of {} which disagrees with "
              "leading axis sizes {}.")
       raise ValueError(msg.format(length, [x.shape[0] for x in xs_flat]))
@@ -203,7 +203,7 @@ def scan(f: Callable[[Carry, X], Tuple[Carry, Y]],
     if len(unique_lengths) > 1:
       msg = "scan got values with different leading axis sizes: {}."
       raise ValueError(msg.format(', '.join(str(x.shape[0]) for x in xs_flat)))
-    elif len(unique_lengths) == 0:
+    elif not unique_lengths:
       msg = "scan got no values to scan over and `length` not provided."
       raise ValueError(msg)
     else:
@@ -221,6 +221,7 @@ def scan(f: Callable[[Carry, X], Tuple[Carry, Y]],
     jaxpr, _, out_tree = _initial_style_jaxpr(
         f, in_tree, carry_avals + x_avals, "scan")
     return jaxpr, out_tree
+
   jaxpr, out_tree = _create_jaxpr(init)
   _, ys_avals = tree_unflatten(out_tree, jaxpr.out_avals)
   ys = tree_map(lambda aval: jnp.zeros([length, *aval.shape], aval.dtype),
@@ -232,6 +233,7 @@ def scan(f: Callable[[Carry, X], Tuple[Carry, Y]],
     carry, y = f(carry, x)
     tree_map(lambda c_ref, c: ref_set(c_ref, (), c), carry_refs, carry)
     tree_map(lambda y_ref, y: ref_set(y_ref, (i,), y), ys_refs, y)
+
   assert isinstance(length, int)
   init, _, ys = for_loop(length, for_body, (init, xs, ys), reverse=reverse,
                          unroll=unroll)
@@ -242,9 +244,10 @@ def _for_abstract_eval(*avals, jaxpr, **__):
   # Find out for each of the `Ref`s in our jaxpr what effects they have.
   jaxpr_aval_effects = state_types.get_ref_state_effects(
       [v.aval for v in jaxpr.invars], jaxpr.effects)[1:]
-  aval_effects = [set(eff.replace(input_index=eff.input_index - 1)
-                      for eff in effs) for aval, effs
-                  in zip(avals, jaxpr_aval_effects)
+  aval_effects = [{
+      eff.replace(input_index=eff.input_index - 1)
+      for eff in effs
+  } for aval, effs in zip(avals, jaxpr_aval_effects)
                   if isinstance(aval, AbstractRef)]
   nonlocal_state_effects = core.join_effects(*aval_effects)
   return list(avals), nonlocal_state_effects
@@ -257,9 +260,10 @@ def _for_discharge_rule(in_avals, _, *args: Any, jaxpr: core.Jaxpr,
   out_vals = for_p.bind(*args, jaxpr=jaxpr, reverse=reverse,
                         which_linear=which_linear, nsteps=nsteps,
                         unroll=unroll)
-  new_invals = []
-  for aval, out_val in zip(in_avals, out_vals):
-    new_invals.append(out_val if isinstance(aval, AbstractRef) else None)
+  new_invals = [
+      out_val if isinstance(aval, AbstractRef) else None
+      for aval, out_val in zip(in_avals, out_vals)
+  ]
   return new_invals, out_vals
 
 def _for_impl(*args, jaxpr, nsteps, reverse, which_linear, unroll):
@@ -372,7 +376,7 @@ def _partial_eval_jaxpr_custom(jaxpr, in_unknowns, policy):
 _save_everything = lambda *_, **__: True
 
 def _is_read_only(ref_effects: Set[StateEffect]) -> bool:
-  assert len(ref_effects) > 0
+  assert ref_effects
   if len(ref_effects) > 1:
     # Means we must have a write or accum effect so not read-only
     return False
@@ -751,9 +755,10 @@ def _for_transpose(in_cts, *args, jaxpr, nsteps, reverse, which_linear, unroll):
                         reverse=not reverse,
                         which_linear=tuple(which_linear_transpose),
                         unroll=unroll)
-  ct_outs = [ct if ad.is_undefined_primal(x) else None
-             for x, ct in zip(args, all_outs)]
-  return ct_outs
+  return [
+      ct if ad.is_undefined_primal(x) else None
+      for x, ct in zip(args, all_outs)
+  ]
 ad.primitive_transposes[for_p] = _for_transpose
 
 ### Testing utility

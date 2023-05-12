@@ -102,7 +102,7 @@ def conv_general_dilated_patches(
   rhs = jnp.tile(rhs, (n_channels,) + (1,) * (rhs.ndim - 1))
   rhs = jnp.moveaxis(rhs, (0, 1), (rhs_spec[0], rhs_spec[1]))
 
-  out = convolution.conv_general_dilated(
+  return convolution.conv_general_dilated(
       lhs=lhs_array,
       rhs=rhs,
       window_strides=window_strides,
@@ -110,12 +110,11 @@ def conv_general_dilated_patches(
       lhs_dilation=lhs_dilation,
       rhs_dilation=rhs_dilation,
       dimension_numbers=dimension_numbers,
-      precision=None if precision is None else (precision,
-                                                lax.Precision.DEFAULT),
+      precision=None if precision is None else
+      (precision, lax.Precision.DEFAULT),
       feature_group_count=n_channels,
-      preferred_element_type=preferred_element_type
+      preferred_element_type=preferred_element_type,
   )
-  return out
 
 
 def conv_general_dilated_local(

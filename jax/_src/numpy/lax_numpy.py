@@ -264,11 +264,6 @@ def _convert_and_clip_integer(val: ArrayLike, dtype: DType) -> Array:
     raise TypeError("_convert_and_clip_integer only accepts integer dtypes.")
 
   val_dtype = dtypes.canonicalize_dtype(val.dtype)
-  if val_dtype != val.dtype:
-    # TODO(jakevdp): this is a weird corner case; need to figure out how to handle it.
-    # This happens in X32 mode and can either come from a jax value created in another
-    # context, or a Python integer converted to int64.
-    pass
   min_val = _lax_const(val, max(iinfo(dtype).min, iinfo(val_dtype).min))
   max_val = _lax_const(val, min(iinfo(dtype).max, iinfo(val_dtype).max))
   return clip(val, min_val, max_val).astype(dtype)
@@ -351,16 +346,16 @@ def _conv(x: Array, y: Array, mode: str, op: str, precision: PrecisionLike) -> A
     raise ValueError(f"{op}: inputs cannot be empty, got shapes {x.shape} and {y.shape}.")
 
   out_order = slice(None)
-  if op == 'correlate':
-    y = ufuncs.conj(y)
-    if len(x) < len(y):
-      x, y = y, x
-      out_order = slice(None, None, -1)
-  elif op == 'convolve':
+  if op == 'convolve':
     if len(x) < len(y):
       x, y = y, x
     y = flip(y)
 
+  elif op == 'correlate':
+    y = ufuncs.conj(y)
+    if len(x) < len(y):
+      x, y = y, x
+      out_order = slice(None, None, -1)
   if mode == 'valid':
     padding = [(0, 0)]
   elif mode == 'same':
@@ -452,7 +447,7 @@ def histogram2d(x: ArrayLike, y: ArrayLike, bins: Union[ArrayLike, List[ArrayLik
   except TypeError:
     N = 1
 
-  if N != 1 and N != 2:
+  if N not in [1, 2]:
     x_edges = y_edges = asarray(bins)
     bins = [x_edges, y_edges]
 
@@ -541,7 +536,7 @@ def rot90(m: ArrayLike, k: int = 1, axes: Tuple[int, int] = (0, 1)) -> Array:
   ax2 = _canonicalize_axis(ax2, ndim(m))
   if ax1 == ax2:
     raise ValueError("Axes must be different")  # same as numpy error
-  k = k % 4
+  k %= 4
   if k == 0:
     return asarray(m)
   elif k == 2:
@@ -549,10 +544,8 @@ def rot90(m: ArrayLike, k: int = 1, axes: Tuple[int, int] = (0, 1)) -> Array:
   else:
     perm = list(range(ndim(m)))
     perm[ax1], perm[ax2] = perm[ax2], perm[ax1]
-    if k == 1:
-      return transpose(flip(m, ax2), perm)
-    else:
-      return flip(transpose(m, perm), ax2)
+    return (transpose(flip(m, ax2), perm) if k == 1 else flip(
+        transpose(m, perm), ax2))
 
 
 @util._wraps(np.flip, lax_description=_ARRAY_VIEW_DOC)
@@ -711,7 +704,7 @@ def gradient(f: ArrayLike, *varargs: ArrayLike,
       return []
     axis_tuple = tuple(_canonicalize_axis(i, a.ndim) for i in axis)
 
-  if min([s for i, s in enumerate(a.shape) if i in axis_tuple]) < 2:
+  if min(s for i, s in enumerate(a.shape) if i in axis_tuple) < 2:
     raise ValueError("Shape of array too small to calculate "
                      "a numerical gradient, "
                      "at least 2 elements are required.")
@@ -882,8 +875,9 @@ def _moveaxis(a: Array, source: Tuple[int, ...], destination: Tuple[int, ...]) -
   source = tuple(_canonicalize_axis(i, ndim(a)) for i in source)
   destination = tuple(_canonicalize_axis(i, ndim(a)) for i in destination)
   if len(source) != len(destination):
-    raise ValueError("Inconsistent number of elements: {} vs {}"
-                     .format(len(source), len(destination)))
+    raise ValueError(
+        f"Inconsistent number of elements: {len(source)} vs {len(destination)}"
+    )
   perm = [i for i in range(ndim(a)) if i not in source]
   for dest, src in sorted(zip(destination, source)):
     perm.insert(dest, src)
@@ -896,38 +890,37 @@ def isclose(a: ArrayLike, b: ArrayLike, rtol: ArrayLike = 1e-05, atol: ArrayLike
             equal_nan: bool = False) -> Array:
   a, b = util.promote_args("isclose", a, b)
   dtype = _dtype(a)
-  if issubdtype(dtype, inexact):
-    if issubdtype(dtype, complexfloating):
-      dtype = util._complex_elem_type(dtype)
-    rtol = lax.convert_element_type(rtol, dtype)
-    atol = lax.convert_element_type(atol, dtype)
-    out = lax.le(
-      lax.abs(lax.sub(a, b)),
-      lax.add(atol, lax.mul(rtol, lax.abs(b))))
-    # This corrects the comparisons for infinite and nan values
-    a_inf = ufuncs.isinf(a)
-    b_inf = ufuncs.isinf(b)
-    any_inf = ufuncs.logical_or(a_inf, b_inf)
-    both_inf = ufuncs.logical_and(a_inf, b_inf)
-    # Make all elements where either a or b are infinite to False
-    out = ufuncs.logical_and(out, ufuncs.logical_not(any_inf))
-    # Make all elements where both a or b are the same inf to True
-    same_value = lax.eq(a, b)
-    same_inf = ufuncs.logical_and(both_inf, same_value)
-    out = ufuncs.logical_or(out, same_inf)
-
-    # Make all elements where either a or b is NaN to False
-    a_nan = ufuncs.isnan(a)
-    b_nan = ufuncs.isnan(b)
-    any_nan = ufuncs.logical_or(a_nan, b_nan)
-    out = ufuncs.logical_and(out, ufuncs.logical_not(any_nan))
-    if equal_nan:
-      # Make all elements where both a and b is NaN to True
-      both_nan = ufuncs.logical_and(a_nan, b_nan)
-      out = ufuncs.logical_or(out, both_nan)
-    return out
-  else:
+  if not issubdtype(dtype, inexact):
     return lax.eq(a, b)
+  if issubdtype(dtype, complexfloating):
+    dtype = util._complex_elem_type(dtype)
+  rtol = lax.convert_element_type(rtol, dtype)
+  atol = lax.convert_element_type(atol, dtype)
+  out = lax.le(
+    lax.abs(lax.sub(a, b)),
+    lax.add(atol, lax.mul(rtol, lax.abs(b))))
+  # This corrects the comparisons for infinite and nan values
+  a_inf = ufuncs.isinf(a)
+  b_inf = ufuncs.isinf(b)
+  any_inf = ufuncs.logical_or(a_inf, b_inf)
+  both_inf = ufuncs.logical_and(a_inf, b_inf)
+  # Make all elements where either a or b are infinite to False
+  out = ufuncs.logical_and(out, ufuncs.logical_not(any_inf))
+  # Make all elements where both a or b are the same inf to True
+  same_value = lax.eq(a, b)
+  same_inf = ufuncs.logical_and(both_inf, same_value)
+  out = ufuncs.logical_or(out, same_inf)
+
+  # Make all elements where either a or b is NaN to False
+  a_nan = ufuncs.isnan(a)
+  b_nan = ufuncs.isnan(b)
+  any_nan = ufuncs.logical_or(a_nan, b_nan)
+  out = ufuncs.logical_and(out, ufuncs.logical_not(any_nan))
+  if equal_nan:
+    # Make all elements where both a and b is NaN to True
+    both_nan = ufuncs.logical_and(a_nan, b_nan)
+    out = ufuncs.logical_or(out, both_nan)
+  return out
 
 
 def _interp(x: ArrayLike, xp: ArrayLike, fp: ArrayLike,
@@ -1331,7 +1324,7 @@ def nonzero(a: ArrayLike, *, size: Optional[int] = None,
       "The size argument of jnp.nonzero must be statically specified "
       "to use jnp.nonzero within JAX transformations.")
   if arr.size == 0 or size == 0:
-    return tuple(zeros(size, int) for dim in arr.shape)
+    return tuple(zeros(size, int) for _ in arr.shape)
   flat_indices = reductions.cumsum(bincount(reductions.cumsum(mask), length=size))
   strides = (np.cumprod(arr.shape[::-1])[::-1] // arr.shape).astype(int_)
   out = tuple((flat_indices // stride) % size for stride, size in zip(strides, arr.shape))
@@ -1368,12 +1361,14 @@ def unwrap(p: ArrayLike, discont: Optional[ArrayLike] = None,
 
   ph_correct = where(ufuncs.abs(dd) < discont, 0, ddmod - dd)
 
-  up = concatenate((
-    lax.slice_in_dim(p, 0, 1, axis=axis),
-    lax.slice_in_dim(p, 1, None, axis=axis) + reductions.cumsum(ph_correct, axis=axis)
-  ), axis=axis)
-
-  return up
+  return concatenate(
+      (
+          lax.slice_in_dim(p, 0, 1, axis=axis),
+          lax.slice_in_dim(p, 1, None, axis=axis) +
+          reductions.cumsum(ph_correct, axis=axis),
+      ),
+      axis=axis,
+  )
 
 
 ### Padding
@@ -1468,8 +1463,8 @@ def _pad_wrap(array: Array, pad_width: PadValue[int]) -> Array:
 
 def _pad_symmetric_or_reflect(array: Array, pad_width: PadValue[int],
                               mode: str, reflect_type: str) -> Array:
-  assert mode in ("symmetric", "reflect")
-  assert reflect_type in ("even", "odd")
+  assert mode in {"symmetric", "reflect"}
+  assert reflect_type in {"even", "odd"}
 
   for i in range(ndim(array)):
     if array.shape[i] == 0:
@@ -1661,8 +1656,8 @@ def _pad(array: ArrayLike, pad_width: PadValueLike[int], mode: str,
   elif mode == "wrap":
     return _pad_wrap(array, pad_width)
 
-  elif mode in ("symmetric", "reflect"):
-    return _pad_symmetric_or_reflect(array, pad_width, str(mode), reflect_type)
+  elif mode in {"symmetric", "reflect"}:
+    return _pad_symmetric_or_reflect(array, pad_width, mode, reflect_type)
 
   elif mode == "edge":
     return _pad_edge(array, pad_width)
@@ -1674,7 +1669,7 @@ def _pad(array: ArrayLike, pad_width: PadValueLike[int], mode: str,
   elif mode in stat_funcs:
     if stat_length is not None:
       stat_length = _broadcast_to_pairs(stat_length, nd, "stat_length")
-    return _pad_stats(array, pad_width, stat_length, stat_funcs[str(mode)])
+    return _pad_stats(array, pad_width, stat_length, stat_funcs[mode])
 
   elif mode == "empty":
     return _pad_empty(array, pad_width)
@@ -1717,8 +1712,9 @@ def pad(array: ArrayLike, pad_width: PadValueLike[int],
     msg = "Unimplemented padding mode '{}' for np.pad."
     raise NotImplementedError(msg.format(mode))
   if unsupported_kwargs:
-    raise ValueError("unsupported keyword arguments for mode '{}': {}"
-                     .format(mode, unsupported_kwargs))
+    raise ValueError(
+        f"unsupported keyword arguments for mode '{mode}': {unsupported_kwargs}"
+    )
   # Set default value if not given.
   constant_values = kwargs.get('constant_values', 0)
   stat_length = kwargs.get('stat_length', None)
@@ -1885,8 +1881,7 @@ def _atleast_nd(x: ArrayLike, n: int) -> Array:
 
 def _block(xs: Union[ArrayLike, List[ArrayLike]]) -> Tuple[Array, int]:
   if isinstance(xs, tuple):
-    raise ValueError("jax.numpy.block does not allow tuples, got {}"
-                     .format(xs))
+    raise ValueError(f"jax.numpy.block does not allow tuples, got {xs}")
   elif isinstance(xs, list):
     if len(xs) == 0:
       raise ValueError("jax.numpy.block does not allow empty list arguments")
@@ -1908,42 +1903,39 @@ def block(arrays: Union[ArrayLike, List[ArrayLike]]) -> Array:
 @util._wraps(np.atleast_1d, update_doc=False, lax_description=_ARRAY_VIEW_DOC)
 @jit
 def atleast_1d(*arys: ArrayLike) -> Union[Array, List[Array]]:
-  if len(arys) == 1:
-    arr = asarray(arys[0])
-    return arr if ndim(arr) >= 1 else reshape(arr, -1)
-  else:
+  if len(arys) != 1:
     return [atleast_1d(arr) for arr in arys]
+  arr = asarray(arys[0])
+  return arr if ndim(arr) >= 1 else reshape(arr, -1)
 
 
 @util._wraps(np.atleast_2d, update_doc=False, lax_description=_ARRAY_VIEW_DOC)
 @jit
 def atleast_2d(*arys: ArrayLike) -> Union[Array, List[Array]]:
-  if len(arys) == 1:
-    arr = asarray(arys[0])
-    if ndim(arr) >= 2:
-      return arr
-    elif ndim(arr) == 1:
-      return expand_dims(arr, axis=0)
-    else:
-      return expand_dims(arr, axis=(0, 1))
-  else:
+  if len(arys) != 1:
     return [atleast_2d(arr) for arr in arys]
+  arr = asarray(arys[0])
+  if ndim(arr) >= 2:
+    return arr
+  elif ndim(arr) == 1:
+    return expand_dims(arr, axis=0)
+  else:
+    return expand_dims(arr, axis=(0, 1))
 
 
 @util._wraps(np.atleast_3d, update_doc=False, lax_description=_ARRAY_VIEW_DOC)
 @jit
 def atleast_3d(*arys: ArrayLike) -> Union[Array, List[Array]]:
-  if len(arys) == 1:
-    arr = asarray(arys[0])
-    if ndim(arr) == 0:
-      arr = expand_dims(arr, axis=(0, 1, 2))
-    elif ndim(arr) == 1:
-      arr = expand_dims(arr, axis=(0, 2))
-    elif ndim(arr) == 2:
-      arr = expand_dims(arr, axis=2)
-    return arr
-  else:
+  if len(arys) != 1:
     return [atleast_3d(arr) for arr in arys]
+  arr = asarray(arys[0])
+  if ndim(arr) == 0:
+    arr = expand_dims(arr, axis=(0, 1, 2))
+  elif ndim(arr) == 1:
+    arr = expand_dims(arr, axis=(0, 2))
+  elif ndim(arr) == 2:
+    arr = expand_dims(arr, axis=2)
+  return arr
 
 
 _ARRAY_DOC = """
@@ -2083,11 +2075,10 @@ def full(shape: Any, fill_value: ArrayLike,
          dtype: Optional[DTypeLike] = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "full")
   util.check_arraylike("full", fill_value)
-  if ndim(fill_value) == 0:
-    shape = canonicalize_shape(shape)
-    return lax.full(shape, fill_value, dtype)
-  else:
+  if ndim(fill_value) != 0:
     return broadcast_to(asarray(fill_value, dtype=dtype), shape)
+  shape = canonicalize_shape(shape)
+  return lax.full(shape, fill_value, dtype)
 
 
 @util._wraps(np.full_like)
@@ -2099,10 +2090,9 @@ def full_like(a: ArrayLike, fill_value: ArrayLike, dtype: Optional[DTypeLike] = 
     shape = canonicalize_shape(shape)
   if ndim(fill_value) == 0:
     return lax.full_like(a, fill_value, dtype, shape)
-  else:
-    shape = np.shape(a) if shape is None else shape
-    dtype = result_type(a) if dtype is None else dtype
-    return broadcast_to(asarray(fill_value, dtype=dtype), shape)
+  shape = np.shape(a) if shape is None else shape
+  dtype = result_type(a) if dtype is None else dtype
+  return broadcast_to(asarray(fill_value, dtype=dtype), shape)
 
 
 @util._wraps(np.zeros)
@@ -2275,7 +2265,7 @@ def arange(start: DimSize, stop: Optional[DimSize] = None,
       start = ceil_(start).astype(int)  # type: ignore
     return lax.iota(dtype, start)
   else:
-    if step is None and start == 0 and stop is not None:
+    if step is None and start == 0:
       stop = np.ceil(stop).astype(int)
       return lax.iota(dtype, stop)
     return array(np.arange(start, stop=stop, step=step, dtype=dtype))
@@ -2284,8 +2274,8 @@ def arange(start: DimSize, stop: Optional[DimSize] = None,
 def _arange_dynamic(
     start: DimSize, stop: DimSize, step: DimSize, dtype: DTypeLike) -> Array:
   # Here if at least one of start, stop, step are dynamic.
-  if any([(not core.is_special_dim_size(v) and not isinstance(v, int))
-          for v in (start, stop, step)]):
+  if any((not core.is_special_dim_size(v) and not isinstance(v, int))
+         for v in (start, stop, step)):
     raise ValueError(
         "In arange with non-constant arguments all of start, stop, and step "
         f"must be either dimension expressions or integers: start={start}, "
@@ -2302,10 +2292,7 @@ def _arange_dynamic(
   gap = step if step_gt_0 else - step
   distance = (stop - start) if step_gt_0 else (start - stop)
   try:
-    if distance >= 1 - gap:
-      size = (distance + gap - 1) // gap
-    else:
-      size = 0
+    size = (distance + gap - 1) // gap if distance >= 1 - gap else 0
   except core.InconclusiveDimensionOperation:
     # Cannot resolve "distance >= 1 - gap". Perhaps we can resolve "distance >= 1"
     try:
@@ -2538,7 +2525,7 @@ def indices(dimensions: Sequence[int], dtype: DTypeLike = int32,
   N = len(dimensions)
   output = []
   s = dimensions
-  for i, dim in enumerate(dimensions):
+  for i, dim in enumerate(s):
     idx = lax.iota(dtype, dim)
     if sparse:
       s = (1,)*i + (dim,) + (1,)*(N - i - 1)
@@ -2573,10 +2560,9 @@ def repeat(a: ArrayLike, repeats: ArrayLike, axis: Optional[int] = None, *,
   axis = core.concrete_or_error(operator.index, axis, "'axis' argument of jnp.repeat()")
   assert isinstance(axis, int)  # to appease mypy
 
-  if core.is_special_dim_size(repeats):
-    if total_repeat_length is not None:
-      raise ValueError("jnp.repeat with a non-constant `repeats` is supported only "
-                       "when `total_repeat_length` is None")
+  if core.is_special_dim_size(repeats) and total_repeat_length is not None:
+    raise ValueError("jnp.repeat with a non-constant `repeats` is supported only "
+                     "when `total_repeat_length` is None")
 
   # If total_repeat_length is not given, use a default.
   if total_repeat_length is None:
@@ -2756,17 +2742,16 @@ def diag_indices(n, ndim=2):
   n = core.concrete_or_error(operator.index, n, "'n' argument of jnp.diag_indices()")
   ndim = core.concrete_or_error(operator.index, ndim, "'ndim' argument of jnp.diag_indices()")
   if n < 0:
-    raise ValueError("n argument to diag_indices must be nonnegative, got {}"
-                     .format(n))
+    raise ValueError(f"n argument to diag_indices must be nonnegative, got {n}")
   if ndim < 0:
-    raise ValueError("ndim argument to diag_indices must be nonnegative, got {}"
-                     .format(ndim))
+    raise ValueError(
+        f"ndim argument to diag_indices must be nonnegative, got {ndim}")
   return (lax.iota(int_, n),) * ndim
 
 @util._wraps(np.diag_indices_from)
 def diag_indices_from(arr):
   util.check_arraylike("diag_indices_from", arr)
-  if not arr.ndim >= 2:
+  if arr.ndim < 2:
     raise ValueError("input array must be at least 2-d")
 
   if len(set(arr.shape)) != 1:
@@ -2824,10 +2809,7 @@ def diagflat(v, k=0):
   adj_length = v_length + abs(k)
   res = zeros(adj_length*adj_length, dtype=v.dtype)
   i = arange(0, adj_length-abs(k))
-  if (k >= 0):
-    fi = i+k+i*adj_length
-  else:
-    fi = i+(i-k)*adj_length
+  fi = i+k+i*adj_length if (k >= 0) else i+(i-k)*adj_length
   res = res.at[fi].set(v)
   res = res.reshape(adj_length, adj_length)
   return res
@@ -2890,7 +2872,7 @@ def delete(arr, obj, axis=None, *, assume_unique_indices=False):
   except TypeError:
     pass
   else:
-    idx = tuple(slice(None) for i in range(axis))
+    idx = tuple(slice(None) for _ in range(axis))
     return concatenate([arr[idx + (slice(0, obj),)], arr[idx + (slice(obj + 1, None),)]], axis=axis)
 
   # Case 2: obj is a static slice.
@@ -2928,7 +2910,7 @@ def delete(arr, obj, axis=None, *, assume_unique_indices=False):
     mask = ~obj
   else:
     raise ValueError(f"np.delete(arr, obj): got obj.dtype={obj.dtype}; must be integer or bool.")
-  return arr[tuple(slice(None) for i in range(axis)) + (mask,)]
+  return arr[tuple(slice(None) for _ in range(axis)) + (mask,)]
 
 @util._wraps(np.insert)
 def insert(arr, obj, values, axis=None):
@@ -2989,7 +2971,7 @@ def apply_along_axis(func1d, axis: int, arr, *args, **kwargs):
   func = lambda arr: func1d(arr, *args, **kwargs)
   for i in range(1, num_dims - axis):
     func = jax.vmap(func, in_axes=i, out_axes=-1)
-  for i in range(axis):
+  for _ in range(axis):
     func = jax.vmap(func, in_axes=0, out_axes=0)
   return func(arr)
 
@@ -3077,8 +3059,9 @@ def matmul(a, b, *, precision=None):  # pylint: disable=missing-docstring
       b_batch.append(len(idx_batch) + len(idx_b_other))
       idx_batch.append(i)
     else:
-      raise ValueError("Incompatible shapes for matmul arguments: {} and {}"
-                       .format(shape(a), shape(b)))
+      raise ValueError(
+          f"Incompatible shapes for matmul arguments: {shape(a)} and {shape(b)}"
+      )
 
   if a_is_mat: idx_a_other.append(num_batch_dims)
   if b_is_mat: idx_b_other.append(num_batch_dims + a_is_mat)
@@ -3188,18 +3171,15 @@ def einsum(
     return jax.named_call(lax.xeinsum, name=spec)(*operands)
 
   optimize = 'optimal' if optimize is True else optimize
-  # using einsum_call=True here is an internal api for opt_einsum
-
-  # Allow handling of shape polymorphism
-  non_constant_dim_types = {
-      type(d) for op in operands if not isinstance(op, str)
-      for d in np.shape(op) if not core.is_constant_dim(d)
-  }
-  if not non_constant_dim_types:
-    contract_path = opt_einsum.contract_path
-  else:
+  if non_constant_dim_types := {
+      type(d)
+      for op in operands if not isinstance(op, str) for d in np.shape(op)
+      if not core.is_constant_dim(d)
+  }:
     ty = next(iter(non_constant_dim_types))
     contract_path = _poly_einsum_handlers.get(ty, _default_poly_einsum_handler)
+  else:
+    contract_path = opt_einsum.contract_path
   operands, contractions = contract_path(
         *operands, einsum_call=True, use_blas=True, optimize=optimize)
 

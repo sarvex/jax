@@ -33,15 +33,15 @@ def jax_issue_role(name, rawtext, text, lineno, inliner, options=None,
       raise RuntimeError(f"Invalid content in {rawtext}: expected an issue or PR number.")
   options = {} if options is None else options
   url = f"https://github.com/google/jax/issues/{text}"
-  node = nodes.reference(rawtext, '#' + text, refuri=url, **options)
+  node = nodes.reference(rawtext, f'#{text}', refuri=url, **options)
   return [node], []
 
 def doi_role(typ, rawtext, text, lineno, inliner, options=None, content=()):
   text = utils.unescape(text)
   has_explicit_title, title, part = split_explicit_title(text)
-  full_url = 'https://doi.org/' + part
+  full_url = f'https://doi.org/{part}'
   if not has_explicit_title:
-    title = 'DOI:' + part
+    title = f'DOI:{part}'
   pnode = nodes.reference(title, title, internal=False, refuri=full_url)
   return [pnode], []
 

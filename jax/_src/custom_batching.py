@@ -122,10 +122,7 @@ def check_vmap_rule_trees(rule, original_out_tree, out_tree, out_batched_tree):
 
 # Like batching.bdim_at_front, but doesn't broadcast if not mapped
 def maybe_bdim_at_front(x, bdim):
-  if bdim is not_mapped:
-    return x
-  else:
-    return util.moveaxis(x, bdim, 0)
+  return x if bdim is not_mapped else util.moveaxis(x, bdim, 0)
 
 # Like batching.batch except (a) not curried and (b) returns inferred output
 # axes instead of accepting and matching a given spec of output axes. Assumes

@@ -92,14 +92,13 @@ def roots(p: ArrayLike, *, strip_zeros: bool = True) -> Array:
     return array([], dtype=dtypes.to_complex_dtype(p_arr.dtype))
   num_leading_zeros = _where(all(p_arr == 0), len(p_arr), argmin(p_arr == 0))
 
-  if strip_zeros:
-    num_leading_zeros = core.concrete_or_error(int, num_leading_zeros,
-      "The error occurred in the jnp.roots() function. To use this within a "
-      "JIT-compiled context, pass strip_zeros=False, but be aware that leading zeros "
-      "will be result in some returned roots being set to NaN.")
-    return _roots_no_zeros(p_arr[num_leading_zeros:])
-  else:
+  if not strip_zeros:
     return _roots_with_zeros(p_arr, num_leading_zeros)
+  num_leading_zeros = core.concrete_or_error(int, num_leading_zeros,
+    "The error occurred in the jnp.roots() function. To use this within a "
+    "JIT-compiled context, pass strip_zeros=False, but be aware that leading zeros "
+    "will be result in some returned roots being set to NaN.")
+  return _roots_no_zeros(p_arr[num_leading_zeros:])
 
 
 _POLYFIT_DOC = """\
@@ -167,10 +166,7 @@ def polyfit(x: Array, y: Array, deg: int, rcond: Optional[float] = None,
                             "to scale the covariance matrix")
       fac = resids / (len(x) - order)
       fac = fac[0] #making np.array() of shape (1,) to int
-    if y.ndim == 1:
-      return c, Vbase * fac
-    else:
-      return c, Vbase[:, :, np.newaxis] * fac
+    return (c, Vbase * fac) if y.ndim == 1 else (c, Vbase[:, :, np.newaxis] * fac)
   else:
     return c
 
@@ -258,11 +254,10 @@ def polyint(p: Array, m: int = 1, k: Optional[int] = None) -> Array:
     raise ValueError("k must be a scalar or a rank-1 array of length 1 or m.")
   if m == 0:
     return p
-  else:
-    grid = (arange(len(p) + m, dtype=p.dtype)[np.newaxis]
-            - arange(m, dtype=p.dtype)[:, np.newaxis])
-    coeff = maximum(1, grid).prod(0)[::-1]
-    return true_divide(concatenate((p, k_arr)), coeff)
+  grid = (arange(len(p) + m, dtype=p.dtype)[np.newaxis]
+          - arange(m, dtype=p.dtype)[:, np.newaxis])
+  coeff = maximum(1, grid).prod(0)[::-1]
+  return true_divide(concatenate((p, k_arr)), coeff)
 
 
 @_wraps(np.polyder)

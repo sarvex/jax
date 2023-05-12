@@ -342,7 +342,7 @@ class WrapKwArgs:
     return self.val == other.val
 
 def wrap_name(name, transform_name):
-  return transform_name + '(' + name + ')'
+  return f'{transform_name}({name})'
 
 def canonicalize_axis(axis, num_dims) -> int:
   """Canonicalize an axis in [-num_dims, num_dims) to [0, num_dims)."""
@@ -484,17 +484,16 @@ def distributed_debug_log(*pairs):
     pairs: A sequence of label/value pairs to log. The first pair is treated as
     a heading for subsequent pairs.
   """
-  if config.jax_distributed_debug:
-    lines = ["\nDISTRIBUTED_DEBUG_BEGIN"]
-    try:
-      lines.append(f"{pairs[0][0]}: {pairs[0][1]}")
-      for label, value in pairs[1:]:
-        lines.append(f"  {label}: {value}")
-    except Exception as e:
-      lines.append("DISTRIBUTED_DEBUG logging failed!")
-      lines.append(f"{e}")
-    lines.append("DISTRIBUTED_DEBUG_END")
-    logger.warning("\n".join(lines))
+  if not config.jax_distributed_debug:
+    return
+  lines = ["\nDISTRIBUTED_DEBUG_BEGIN"]
+  try:
+    lines.append(f"{pairs[0][0]}: {pairs[0][1]}")
+    lines.extend(f"  {label}: {value}" for label, value in pairs[1:])
+  except Exception as e:
+    lines.extend(("DISTRIBUTED_DEBUG logging failed!", f"{e}"))
+  lines.append("DISTRIBUTED_DEBUG_END")
+  logger.warning("\n".join(lines))
 
 
 class OrderedSet(Generic[T]):

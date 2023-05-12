@@ -152,10 +152,11 @@ def aval_to_xla_shapes(aval: core.AbstractValue) -> Sequence[xc.Shape]:
 
 xla_shape_handlers: Dict[Type[core.AbstractValue],
                          Callable[[Any], Sequence[xc.Shape]]] = {
-    ShapedArray: _make_array_shape,
-    ConcreteArray: _make_array_shape,
-}
-xla_shape_handlers[core.AbstractToken] = lambda _: (xc.Shape.token_shape(),)
+                             ShapedArray: _make_array_shape,
+                             ConcreteArray: _make_array_shape,
+                             core.AbstractToken: lambda _:
+                             (xc.Shape.token_shape(), ),
+                         }
 
 
 # IR constants
@@ -163,11 +164,11 @@ xla_shape_handlers[core.AbstractToken] = lambda _: (xc.Shape.token_shape(),)
 # TODO(mattjj): try to remove this canonicalize_dtype stuff
 def canonicalize_dtype(x):
   typ = type(x)
-  handler = canonicalize_dtype_handlers.get(typ)
-  if handler: return handler(x)
+  if handler := canonicalize_dtype_handlers.get(typ):
+    return handler(x)
   for typ in typ.__mro__:
-    handler = canonicalize_dtype_handlers.get(typ)
-    if handler: return handler(x)
+    if handler := canonicalize_dtype_handlers.get(typ):
+      return handler(x)
   if hasattr(x, '__jax_array__'):
     return canonicalize_dtype(x.__jax_array__())
   raise TypeError(f"No canonicalize_dtype handler for type: {type(x)}")
@@ -184,8 +185,8 @@ def _canonicalize_python_scalar_dtype(typ, x):
       x, dtypes.canonicalize_dtype(dtypes._scalar_type_to_dtype(typ, x)))
 
 canonicalize_dtype_handlers: Dict[Any, Callable] = {}
-canonicalize_dtype_handlers.update(
-    (t, _canonicalize_ndarray_dtype) for t in numpy_scalar_types)
+canonicalize_dtype_handlers |= ((t, _canonicalize_ndarray_dtype)
+                                for t in numpy_scalar_types)
 canonicalize_dtype_handlers[np.ndarray] = _canonicalize_ndarray_dtype
 canonicalize_dtype_handlers[np.ma.MaskedArray] = _canonicalize_masked_array_dtype
 canonicalize_dtype_handlers.update(
@@ -195,11 +196,11 @@ canonicalize_dtype_handlers[core.DArray] = identity
 
 def abstractify(x) -> Any:
   typ = type(x)
-  aval_fn = pytype_aval_mappings.get(typ)
-  if aval_fn: return aval_fn(x)
+  if aval_fn := pytype_aval_mappings.get(typ):
+    return aval_fn(x)
   for typ in typ.__mro__:
-    aval_fn = pytype_aval_mappings.get(typ)
-    if aval_fn: return aval_fn(x)
+    if aval_fn := pytype_aval_mappings.get(typ):
+      return aval_fn(x)
   if hasattr(x, '__jax_array__'):
     return abstractify(x.__jax_array__())
   raise TypeError(f"Argument '{x}' of type '{type(x)}' is not a valid JAX type")
@@ -221,11 +222,12 @@ def _make_shaped_array_for_numpy_array(x: np.ndarray) -> ShapedArray:
   return ShapedArray(x.shape, dtypes.canonicalize_dtype(dtype))
 
 
-pytype_aval_mappings: Dict[Any, Callable[[Any], core.AbstractValue]] = {}
-pytype_aval_mappings[core.DArray] = operator.attrgetter('_aval')
-pytype_aval_mappings[core.Token] = lambda _: core.abstract_token
-pytype_aval_mappings.update((t, _make_shaped_array_for_numpy_scalar)
-                            for t in numpy_scalar_types)
+pytype_aval_mappings: Dict[Any, Callable[[Any], core.AbstractValue]] = {
+    core.DArray: operator.attrgetter('_aval'),
+    core.Token: lambda _: core.abstract_token,
+}
+pytype_aval_mappings |= ((t, _make_shaped_array_for_numpy_scalar)
+                         for t in numpy_scalar_types)
 pytype_aval_mappings[np.ndarray] = _make_shaped_array_for_numpy_array
 pytype_aval_mappings.update(
     (t, partial(_make_abstract_python_scalar, t)) for t in _scalar_types)
@@ -252,9 +254,8 @@ def primitive_subcomputation(platform: str, axis_env: 'AxisEnv',
 
   if prim.multiple_results:
     return c.build(xops.Tuple(c, ans))
-  else:
-    x, = ans
-    return c.build(x)
+  x, = ans
+  return c.build(x)
 
 
 ### compiling jaxprs

@@ -114,7 +114,7 @@ def sharding_spec_sharding_proto(
   mesh_permutation = []
   new_mesh_shape = []
   next_sharded_axis = 0
-  for axis, sharding in enumerate(self.sharding):
+  for sharding in self.sharding:
     if isinstance(sharding, NoSharding):
       new_mesh_shape.append(1)  # Add a dummy mesh axis we won't be sharding over
     elif isinstance(sharding, Chunked):
@@ -258,10 +258,9 @@ def spec_to_indices(shape: Sequence[int],
 def make_sharding_spec(axis_sizes, mesh_axis_pos, num_dimensions, aval_axes):
   mesh_mapping = [Replicated(axis_size) for axis_size in axis_sizes.values()]
   sharding = [_UNSHARDED_INSTANCE] * num_dimensions
-  next_sharded_axis = 0
   # NOTE: sorted is stable, which is important when multiple resources
   #       map to the same axis.
-  for name, axis in sorted(aval_axes.items(), key=lambda x: x[1]):
+  for next_sharded_axis, (name, axis) in enumerate(sorted(aval_axes.items(), key=lambda x: x[1])):
     chunked = sharding[axis]
     if isinstance(chunked, NoSharding):
       chunked = Chunked([])
@@ -269,7 +268,6 @@ def make_sharding_spec(axis_sizes, mesh_axis_pos, num_dimensions, aval_axes):
     assert isinstance(mesh_mapping[mesh_axis_pos[name]], Replicated), \
         "Value mapped to the same mesh axis twice"
     mesh_mapping[mesh_axis_pos[name]] = ShardedAxis(next_sharded_axis)
-    next_sharded_axis += 1
   return ShardingSpec(sharding, mesh_mapping)
 
 

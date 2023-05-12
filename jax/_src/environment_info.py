@@ -50,10 +50,6 @@ def print_environment_info(return_string: bool = False) -> Union[None, str]:
   jax.devices ({xla_bridge.device_count()} total, {xla_bridge.local_device_count()} local): {devices_short}
   process_count: {xla_bridge.process_count()}"""
   )
-  nvidia_smi = try_nvidia_smi()
-  if nvidia_smi:
+  if nvidia_smi := try_nvidia_smi():
     info += '\n\n$ nvidia-smi\n' + nvidia_smi
-  if return_string:
-    return info
-  else:
-    return print(info)
+  return info if return_string else print(info)

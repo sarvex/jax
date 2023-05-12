@@ -219,26 +219,22 @@ class Error:
   def get(self) -> Optional[str]:
     """Returns error message if error happened, None if no error happened."""
     exp = self.get_exception()
-    if exp is not None:
-      return str(exp)
-    return None
+    return str(exp) if exp is not None else None
 
   def get_exception(self) -> Optional[JaxException]:
     """Returns Python exception if error happened, None if no error happened."""
     if any(map(np.shape, self._pred.values())):
       return self._get_batched_exception()
-    else:
-      min_code = None
-      cur_effect = None
-      for error_effect, code in self._code.items():
-        if self._pred[error_effect]:
-          if min_code is None or code < min_code:
-            min_code = code
-            cur_effect = error_effect
+    min_code = None
+    cur_effect = None
+    for error_effect, code in self._code.items():
+      if self._pred[error_effect] and (min_code is None or code < min_code):
+        min_code = code
+        cur_effect = error_effect
 
-      if cur_effect is not None:
-        return tree_unflatten(self._metadata[int(min_code)],  # type: ignore
-                              self._payload[cur_effect])
+    if cur_effect is not None:
+      return tree_unflatten(self._metadata[int(min_code)],  # type: ignore
+                            self._payload[cur_effect])
     return None
 
   def throw(self):
@@ -256,19 +252,16 @@ class Error:
       min_code = None
       cur_effect = None
       for error_effect, code in self._code.items():
-        if self._pred[error_effect][idx]:   # type: ignore
-          if min_code is None or code[idx] < min_code:
-            min_code = code[idx]   # type: ignore
-            cur_effect = error_effect
+        if self._pred[error_effect][idx] and (min_code is None
+                                              or code[idx] < min_code):
+          min_code = code[idx]   # type: ignore
+          cur_effect = error_effect
 
       if cur_effect is not None:
         payload = tree_map(lambda x, i=idx: x[i], self._payload[cur_effect])
         jax_error = tree_unflatten(self._metadata[int(min_code)], payload)  # type: ignore
         error_mapping[idx] = jax_error
-    if error_mapping:
-      return BatchedError(error_mapping)
-    else:
-      return None
+    return BatchedError(error_mapping) if error_mapping else None
 
   def _update(self, effect_type: ErrorEffect, pred, code, metadata, payload):
     new_errs = {**self._pred, **{effect_type: pred}}  # type: ignore
@@ -396,9 +389,7 @@ def checkify_jaxpr_flat(jaxpr: core.Jaxpr, consts: Sequence[core.Value],
   error = jtu.tree_unflatten(err_tree, err_vals)
 
   def read_env(var: core.Atom):
-    if isinstance(var, core.Literal):
-      return var.val
-    return env[var]
+    return var.val if isinstance(var, core.Literal) else env[var]
 
   def write_env(var: core.Var, val: Any):
     env[var] = val
@@ -458,8 +449,7 @@ def check_impl(*args, err_tree, debug):
     # NOOP (check will only trigger when discharged)
     return []
   error = tree_unflatten(err_tree, args)
-  exc = error.get_exception()
-  if exc:
+  if exc := error.get_exception():
     raise JaxRuntimeError(str(exc)) from exc
   return []
 
@@ -547,9 +537,7 @@ def check_nans(prim, error, enabled_errors, out):
     return error
 
   def isnan(x):
-    if isinstance(x, prng.PRNGKeyArray):
-      return False
-    return jnp.any(jnp.isnan(x))
+    return False if isinstance(x, prng.PRNGKeyArray) else jnp.any(jnp.isnan(x))
 
   any_nans = (jnp.any(jnp.array([isnan(x) for x in out]))
               if prim.multiple_results else isnan(out))
@@ -650,8 +638,7 @@ def oob_payload(oob_mask, indices, dims_map, operand_shape):
   oob_axis = jnp.array(dims_map)[multi_idx[-1]]
   oob_axis_size = jnp.array(operand_shape)[oob_axis]
   oob_index = jnp.ravel(indices)[flat_idx]
-  payload = jnp.array([oob_index, oob_axis, oob_axis_size], dtype=jnp.int32)
-  return payload
+  return jnp.array([oob_index, oob_axis, oob_axis_size], dtype=jnp.int32)
 
 def scatter_oob(operand, indices, updates, dnums):
   # Ref: see clamping code used in scatter_translation_rule

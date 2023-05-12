@@ -35,7 +35,6 @@ class ClusterEnv:
     cls._cluster_types.append(cls)
 
   @classmethod
-  # pytype: disable=bad-return-type
   def auto_detect_unset_distributed_params(cls,
                                            coordinator_address: Optional[str],
                                            num_processes: Optional[int],
@@ -47,8 +46,8 @@ class ClusterEnv:
       process_id, local_device_ids)):
       return (coordinator_address, num_processes, process_id,
               local_device_ids)
-    env = next((env for env in cls._cluster_types if env.is_env_present()), None)
-    if env:
+    if env := next((env for env in cls._cluster_types if env.is_env_present()),
+                   None):
       logger.debug('Initializing distributed JAX environment via %s', env.__name__)
       if coordinator_address is None:
         coordinator_address = env.get_coordinator_address()

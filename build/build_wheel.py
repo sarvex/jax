@@ -106,13 +106,11 @@ def patch_copy_xla_extension_stubs(dst_dir):
   xla_extension_dir = os.path.join(dst_dir, "xla_extension")
   os.makedirs(xla_extension_dir)
   for stub_name in _XLA_EXTENSION_STUBS:
-    stub_path = r.Rlocation(
-        "xla/xla/python/xla_extension/" + stub_name)
+    stub_path = r.Rlocation(f"xla/xla/python/xla_extension/{stub_name}")
     stub_path = str(stub_path)  # Make pytype accept os.path.exists(stub_path).
     if stub_name in _OPTIONAL_XLA_EXTENSION_STUBS and not os.path.exists(stub_path):
       continue
-    with open(stub_path) as f:
-      src = f.read()
+    src = pathlib.Path(stub_path).read_text()
     src = src.replace(
         "from xla.python import xla_extension",
         "from .. import xla_extension"
@@ -251,7 +249,7 @@ def edit_jaxlib_version(sources_path):
   version_file = pathlib.Path(sources_path) / "jaxlib" / "version.py"
   content = version_file.read_text()
 
-  version_num = version_regex.search(content).group(1)
+  version_num = version_regex.search(content)[1]
 
   datestring = datetime.datetime.now().strftime('%Y%m%d')
   nightly_version = f'{version_num}.dev{datestring}'

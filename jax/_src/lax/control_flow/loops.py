@@ -195,7 +195,7 @@ def scan(f: Callable[[Carry, X], Tuple[Carry, Y]],
 
   if length is not None:
     length = int(length)
-    if not all(length == l for l in lengths):
+    if any(length != l for l in lengths):
       msg = ("scan got `length` argument of {} which disagrees with "
              "leading axis sizes {}.")
       raise ValueError(msg.format(length, [x.shape[0] for x in xs_flat]))
@@ -204,7 +204,7 @@ def scan(f: Callable[[Carry, X], Tuple[Carry, Y]],
     if len(unique_lengths) > 1:
       msg = "scan got values with different leading axis sizes: {}."
       raise ValueError(msg.format(', '.join(str(x.shape[0]) for x in xs_flat)))
-    elif len(unique_lengths) == 0:
+    elif not unique_lengths:
       msg = "scan got no values to scan over and `length` not provided."
       raise ValueError(msg)
     else:
@@ -271,8 +271,7 @@ def _check_scan_carry_type(body_fun, in_carry, out_carry_tree, out_avals):
     sig = inspect.signature(body_fun)
   except (ValueError, TypeError):
     sig = None
-  carry_name = sig and list(sig.parameters)[0]
-  if carry_name:
+  if carry_name := sig and list(sig.parameters)[0]:
     component = lambda p: (f'the input carry component {carry_name}{keystr(p)}'
                            if p else f'the input carry {carry_name}')
   else:
@@ -370,10 +369,9 @@ def _scan_impl_loop(*args, reverse, length, num_consts, num_carry, linear,
   ys_init = _map(partial(_empty_array, length), y_avals)
   if length == 0:
     return init + ys_init
-  else:
-    init_val = [lax._const(length, 0)] + init + ys_init
-    _, *outs = while_loop(cond_fun, body_fun, init_val)
-    return outs
+  init_val = [lax._const(length, 0)] + init + ys_init
+  _, *outs = while_loop(cond_fun, body_fun, init_val)
+  return outs
 
 def _scan_impl_block_unrolled(*args, reverse, length, num_consts, num_carry,
                               linear, block_length, f_impl, x_avals, y_avals):
@@ -1185,8 +1183,7 @@ def _while_loop_abstract_eval(*avals, cond_jaxpr, body_jaxpr, body_nconsts,
   del avals
   joined_effects = _join_while_effects(body_jaxpr, cond_jaxpr, body_nconsts,
                                        cond_nconsts)
-  disallowed_effects = allowed_effects.filter_not_in(joined_effects)
-  if disallowed_effects:
+  if disallowed_effects := allowed_effects.filter_not_in(joined_effects):
     raise NotImplementedError(
         f'Effects not supported in `while`: {disallowed_effects}')
   return _map(raise_to_shaped, body_jaxpr.out_avals), joined_effects
@@ -1265,7 +1262,7 @@ def _while_loop_batching_rule(spmd_axis_name, axis_size, axis_name, main_type,
   for x, old_axis, new_axis in zip(init, init_dims, carry_dims):
     if old_axis is batching.not_mapped and new_axis is not batching.not_mapped:
       new_init.append(batching.broadcast(x, axis_size, new_axis))
-    elif old_axis is batching.not_mapped and new_axis is batching.not_mapped:
+    elif old_axis is batching.not_mapped:
       new_init.append(x)
     else:
       assert new_axis is not batching.not_mapped
@@ -1368,7 +1365,7 @@ def _while_partial_eval(trace: pe.JaxprTrace, *tracers: pe.Tracer, cond_nconsts:
   cond_jaxpr_known, _, cond_uk, _ = pe.partial_eval_jaxpr_nounits(  # type: ignore
       cond_jaxpr, cond_consts_uk + carry_uk, instantiate=False)
 
-  if cond_uk[0] or all([not uk for uk in unknowns]) or all(unknowns):
+  if cond_uk[0] or not any(unknowns) or all(unknowns):
     # If conditional is unknown, or all inputs are known, or all are unknown,
     # just do the default processing.
     return trace.default_process_primitive(while_p, tracers, params)
@@ -1605,8 +1602,7 @@ def _while_typecheck(_, *in_atoms, cond_jaxpr, body_jaxpr, cond_nconsts,
   # TODO(frostig,mattjj): check cond_jaxpr, body_jaxpr types
   joined_effects = _join_while_effects(body_jaxpr, cond_jaxpr, body_nconsts,
                                        cond_nconsts)
-  disallowed_effects = allowed_effects.filter_not_in(joined_effects)
-  if disallowed_effects:
+  if disallowed_effects := allowed_effects.filter_not_in(joined_effects):
     raise NotImplementedError(
         f'Effects not supported in `while`: {disallowed_effects}')
   return body_jaxpr.out_avals, joined_effects
@@ -1629,22 +1625,19 @@ core.custom_typechecks[while_p] = _while_typecheck
 def _pred_bcast_select_hlo(ctx,
     pred_aval: core.ShapedArray, pred: ir.Value, xs: Sequence[ir.Value],
     ys: Sequence[ir.Value], x_y_aval: core.AbstractValue) -> Sequence[ir.Value]:
+  x, = xs
+  y, = ys
   if x_y_aval is core.abstract_token:
-    x, = xs
-    y, = ys
     return [hlo.AfterAllOp([x, y]).result]
-  else:
-    assert isinstance(x_y_aval, core.ShapedArray), x_y_aval
-    x, = xs
-    y, = ys
-    assert x.type == y.type, (x.type, y.type)
-    assert (pred_aval.shape == x_y_aval.shape[:len(pred_aval.shape)]), (
-            pred_aval.shape, x_y_aval)
-    if core.is_opaque_dtype(x_y_aval.dtype):
-      x_y_aval, = x_y_aval.dtype._rules.physical_avals(x_y_aval)
-    bcast_pred = mlir.broadcast_in_dim(ctx, pred, core.DShapedArray(x_y_aval.shape, np.dtype(np.bool_)),
-                                       broadcast_dimensions=list(range(len(pred_aval.shape))))
-    return hlo.SelectOp(bcast_pred, x, y).results
+  assert isinstance(x_y_aval, core.ShapedArray), x_y_aval
+  assert x.type == y.type, (x.type, y.type)
+  assert (pred_aval.shape == x_y_aval.shape[:len(pred_aval.shape)]), (
+          pred_aval.shape, x_y_aval)
+  if core.is_opaque_dtype(x_y_aval.dtype):
+    x_y_aval, = x_y_aval.dtype._rules.physical_avals(x_y_aval)
+  bcast_pred = mlir.broadcast_in_dim(ctx, pred, core.DShapedArray(x_y_aval.shape, np.dtype(np.bool_)),
+                                     broadcast_dimensions=list(range(len(pred_aval.shape))))
+  return hlo.SelectOp(bcast_pred, x, y).results
 
 ### fori_loop
 
@@ -1904,7 +1897,7 @@ def associative_scan(fn: Callable, elems, reverse: bool = False, axis: int = 0):
         f"of non-constant size: {elems_flat[0].shape[axis]}. You may be "
         "able to avoid this on TPU. See b/274176030.")
   num_elems = int(elems_flat[0].shape[axis])
-  if not all(int(elem.shape[axis]) == num_elems for elem in elems_flat[1:]):
+  if any(int(elem.shape[axis]) != num_elems for elem in elems_flat[1:]):
     raise ValueError('Array inputs to associative_scan must have the same '
                      'first dimension. (saw: {})'
                      .format([elem.shape for elem in elems_flat]))
@@ -1968,7 +1961,7 @@ def associative_scan(fn: Callable, elems, reverse: bool = False, axis: int = 0):
 
 def _interleave(a, b, axis):
   """Given two Tensors of static shape, interleave them along the first axis."""
-  assert a.shape[axis] == b.shape[axis] or a.shape[axis] == b.shape[axis] + 1
+  assert a.shape[axis] in [b.shape[axis], b.shape[axis] + 1]
   a_pad = [(0, 0, 0)] * a.ndim
   b_pad = [(0, 0, 0)] * b.ndim
   a_pad[axis] = (0, 1 if a.shape[axis] == b.shape[axis] else 0, 1)
@@ -1981,23 +1974,23 @@ def _interleave(a, b, axis):
 
 def cumsum(operand: Array, axis: int = 0, reverse: bool = False) -> Array:
   """Computes a cumulative sum along `axis`."""
-  return cumsum_p.bind(operand, axis=int(axis), reverse=bool(reverse))
+  return cumsum_p.bind(operand, axis=axis, reverse=reverse)
 
 def cumprod(operand: Array, axis: int = 0, reverse: bool = False) -> Array:
   """Computes a cumulative product along `axis`."""
-  return cumprod_p.bind(operand, axis=int(axis), reverse=bool(reverse))
+  return cumprod_p.bind(operand, axis=axis, reverse=reverse)
 
 def cummax(operand: Array, axis: int = 0, reverse: bool = False) -> Array:
   """Computes a cumulative maximum along `axis`."""
-  return cummax_p.bind(operand, axis=int(axis), reverse=bool(reverse))
+  return cummax_p.bind(operand, axis=axis, reverse=reverse)
 
 def cummin(operand: Array, axis: int = 0, reverse: bool = False) -> Array:
   """Computes a cumulative minimum along `axis`."""
-  return cummin_p.bind(operand, axis=int(axis), reverse=bool(reverse))
+  return cummin_p.bind(operand, axis=axis, reverse=reverse)
 
 def cumlogsumexp(operand: Array, axis: int = 0, reverse: bool = False) -> Array:
   """Computes a cumulative logsumexp along `axis`."""
-  return cumlogsumexp_p.bind(operand, axis=int(axis), reverse=bool(reverse))
+  return cumlogsumexp_p.bind(operand, axis=axis, reverse=reverse)
 
 def _cumred_shape_rule(x, *, axis: int, reverse: bool):
   if axis < 0 or axis >= x.ndim:
@@ -2044,8 +2037,9 @@ def _cumred_batch_rule(prim, batched_args, batch_dims, *, axis: int,
 
 def _cumred_dtype_rule(name, operand, *args, **kw):
   if not dtypes.issubdtype(operand.dtype, np.number):
-    raise TypeError("{} does not accept dtype {}. Accepted dtypes are subtypes "
-                    "of number.".format(name, np.dtype(operand.dtype).name))
+    raise TypeError(
+        f"{name} does not accept dtype {np.dtype(operand.dtype).name}. Accepted dtypes are subtypes of number."
+    )
   return dtypes.canonicalize_dtype(operand.dtype)
 
 

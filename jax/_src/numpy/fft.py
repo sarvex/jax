@@ -42,7 +42,7 @@ def _fft_norm(s: Array, func_name: str, norm: str) -> Array:
 def _fft_core(func_name: str, fft_type: xla_client.FftType, a: ArrayLike,
               s: Optional[Shape], axes: Optional[Sequence[int]],
               norm: Optional[str]) -> Array:
-  full_name = "jax.numpy.fft." + func_name
+  full_name = f"jax.numpy.fft.{func_name}"
   check_arraylike(full_name, a)
   arr = jnp.asarray(a)
 
@@ -57,11 +57,7 @@ def _fft_core(func_name: str, fft_type: xla_client.FftType, a: ArrayLike,
 
   orig_axes = axes
   if axes is None:
-    if s is None:
-      axes = range(arr.ndim)
-    else:
-      axes = range(arr.ndim - len(s), arr.ndim)
-
+    axes = range(arr.ndim) if s is None else range(arr.ndim - len(s), arr.ndim)
   if len(axes) != len(set(axes)):
     raise ValueError(
         f"{full_name} does not support repeated axes. Got axes {axes}.")
@@ -87,13 +83,12 @@ def _fft_core(func_name: str, fft_type: xla_client.FftType, a: ArrayLike,
     arr = arr[tuple(map(slice, in_s))]
     # Padding
     arr = jnp.pad(arr, [(0, x-y) for x, y in zip(in_s, arr.shape)])
+  elif fft_type == xla_client.FftType.IRFFT:
+    s = [arr.shape[axis] for axis in axes[:-1]]
+    if axes:
+      s += [max(0, 2 * (arr.shape[axes[-1]] - 1))]
   else:
-    if fft_type == xla_client.FftType.IRFFT:
-      s = [arr.shape[axis] for axis in axes[:-1]]
-      if axes:
-        s += [max(0, 2 * (arr.shape[axes[-1]] - 1))]
-    else:
-      s = [arr.shape[axis] for axis in axes]
+    s = [arr.shape[axis] for axis in axes]
   transformed = lax.fft(arr, fft_type, tuple(s))
   if norm is not None:
     transformed *= _fft_norm(
@@ -133,7 +128,7 @@ def irfftn(a: ArrayLike, s: Optional[Shape] = None,
 
 
 def _axis_check_1d(func_name: str, axis: Optional[int]):
-  full_name = "jax.numpy.fft." + func_name
+  full_name = f"jax.numpy.fft.{func_name}"
   if isinstance(axis, (list, tuple)):
     raise ValueError(
         "%s does not support multiple axes. Please use %sn. "
@@ -196,13 +191,13 @@ def ihfft(a: ArrayLike, n: Optional[int] = None,
 def _fft_core_2d(func_name: str, fft_type: xla_client.FftType, a: ArrayLike,
                  s: Optional[Shape], axes: Sequence[int],
                  norm: Optional[str]) -> Array:
-  full_name = "jax.numpy.fft." + func_name
-  if len(axes) != 2:
-    raise ValueError(
-        "%s only supports 2 axes. Got axes = %r."
-        % (full_name, axes)
-    )
-  return _fft_core(func_name, fft_type, a, s, axes, norm)
+  if len(axes) == 2:
+    return _fft_core(func_name, fft_type, a, s, axes, norm)
+  full_name = f"jax.numpy.fft.{func_name}"
+  raise ValueError(
+      "%s only supports 2 axes. Got axes = %r."
+      % (full_name, axes)
+  )
 
 
 @_wraps(np.fft.fft2)
@@ -250,14 +245,14 @@ def fftfreq(n: int, d: ArrayLike = 1.0, *, dtype=None) -> Array:
   k = jnp.zeros(n, dtype=dtype)
   if n % 2 == 0:
     # k[0: n // 2 - 1] = jnp.arange(0, n // 2 - 1)
-    k = k.at[0: n // 2].set( jnp.arange(0, n // 2, dtype=dtype))
+    k = k.at[:n // 2].set(jnp.arange(0, n // 2, dtype=dtype))
 
     # k[n // 2:] = jnp.arange(-n // 2, -1)
     k = k.at[n // 2:].set( jnp.arange(-n // 2, 0, dtype=dtype))
 
   else:
     # k[0: (n - 1) // 2] = jnp.arange(0, (n - 1) // 2)
-    k = k.at[0: (n - 1) // 2 + 1].set(jnp.arange(0, (n - 1) // 2 + 1, dtype=dtype))
+    k = k.at[:(n - 1) // 2 + 1].set(jnp.arange(0, (n - 1) // 2 + 1, dtype=dtype))
 
     # k[(n - 1) // 2 + 1:] = jnp.arange(-(n - 1) // 2, -1)
     k = k.at[(n - 1) // 2 + 1:].set(jnp.arange(-(n - 1) // 2, 0, dtype=dtype))

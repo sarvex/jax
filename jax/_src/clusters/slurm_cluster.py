@@ -40,14 +40,13 @@ class SlurmCluster(clusters.ClusterEnv):
     node_list = os.environ[_NODE_LIST]
     delims = {',', '['}
     ind = next((i for i, ch  in enumerate(node_list) if ch in delims), len(node_list))
-    if ind == len(node_list) or node_list[ind] == ',': # Formats: 'node001' or 'node001,host2'
-        return f'{node_list[:ind]}:{port}'
-    else: # Formats: 'node[001-0015],host2' or 'node[001,007-015],host2'
-        prefix = node_list[:ind]
-        suffix = node_list[ind+1:]
-        delims2 = {',', '-'}
-        ind2 = next((i for i, ch  in enumerate(suffix) if ch in delims2), None)
-        return f'{prefix}{suffix[:ind2]}:{port}'
+    if ind == len(node_list) or node_list[ind] == ',':
+      return f'{node_list[:ind]}:{port}'
+    prefix = node_list[:ind]
+    suffix = node_list[ind+1:]
+    delims2 = {',', '-'}
+    ind2 = next((i for i, ch  in enumerate(suffix) if ch in delims2), None)
+    return f'{prefix}{suffix[:ind2]}:{port}'
 
   @classmethod
   def get_process_count(cls) -> int:

@@ -40,12 +40,7 @@ from jax._src.partition_spec import PartitionSpec
 
 import numpy as np
 
-if sys.version_info >= (3, 9):
-  OrderedDictType = OrderedDict
-else:
-  OrderedDictType = Dict
-
-
+OrderedDictType = OrderedDict if sys.version_info >= (3, 9) else Dict
 Shape = Tuple[int, ...]
 Device = xc.Device
 Index = Tuple[slice, ...]
@@ -344,9 +339,7 @@ class SingleDeviceSharding(XLACompatibleSharding):
   def __eq__(self, other):
     if not isinstance(other, SingleDeviceSharding):
       return False
-    if id(self) == id(other):
-      return True
-    return self._device == other._device
+    return True if id(self) == id(other) else self._device == other._device
 
   @property
   def device_set(self) -> Set[Device]:
@@ -465,10 +458,9 @@ class PmapSharding(XLACompatibleSharding):
 
   @functools.cached_property
   def is_fully_replicated(self) -> bool:
-    for s in self.sharding_spec.sharding:
-      if isinstance(s, sharding_specs.Unstacked):
-        return False
-    return True
+    return not any(
+        isinstance(s, sharding_specs.Unstacked)
+        for s in self.sharding_spec.sharding)
 
   @functools.lru_cache(maxsize=4096)
   def shard_shape(self, global_shape: Shape) -> Shape:
@@ -538,7 +530,9 @@ class PositionalSharding(XLACompatibleSharding):
     platform_name = self._devices[0].platform.upper()
     for idx, x in np.ndenumerate(ids):
       ids[idx] = DeviceIdSet(platform_name, *(self._devices[i].id for i in x))
-    body = np.array2string(ids, prefix=cls_name + '(', suffix=')',
+    body = np.array2string(ids,
+                           prefix=f'{cls_name}(',
+                           suffix=')',
                            max_line_width=100)
     return f'{cls_name}({body})'
 
@@ -767,8 +761,7 @@ def array_mapping_to_axis_resources(array_mapping: ArrayMapping):
       max_index = index
   partitions = []
   for i in range(max_index + 1):
-    axis = reverse_map[i]
-    if axis:
+    if axis := reverse_map[i]:
       partitions.append(axis[0] if len(axis) == 1 else tuple(axis))
     else:
       partitions.append(None)
@@ -815,13 +808,11 @@ class ParsedPartitionSpec:
     return self.unsynced_user_spec(SpecSync.IN_SYNC)
 
   def get_partition_spec(self) -> PartitionSpec:
-    if self.sync < SpecSync.IN_SYNC:
-      return get_single_pspec(self)
+    if self.sync >= SpecSync.IN_SYNC and isinstance(self.unsafe_user_spec,
+                                                    PartitionSpec):
+      return self.unsafe_user_spec
     else:
-      if isinstance(self.unsafe_user_spec, PartitionSpec):
-        return self.unsafe_user_spec
-      else:
-        return get_single_pspec(self)
+      return get_single_pspec(self)
 
   def unsynced_user_spec(self, min_sync):
     if self.sync < min_sync:
@@ -968,8 +959,7 @@ def _check_unique_resources(axis_resources, arg_name):
         itertools.chain.from_iterable(constrained_dims))
     if not resource_counts: continue
     if resource_counts.most_common(1)[0][1] > 1:
-      multiple_uses = [r for r, c in resource_counts.items() if c > 1]
-      if multiple_uses:
+      if multiple_uses := [r for r, c in resource_counts.items() if c > 1]:
         raise ValueError(f"A single {arg_name} specification can map every mesh axis "
                          f"to at most one positional dimension, but {arg_axis_resources.user_spec} "
                          f"has duplicate entries for {mesh_lib.show_axes(multiple_uses)}")
